@@ -2,6 +2,10 @@
   // Clean up old intervals and popover on reload
   const existingPop = document.getElementById('antigravity-usage-popover');
   if (existingPop) existingPop.remove();
+  const existingModal = document.getElementById('antigravity-switcher-modal');
+  if (existingModal) existingModal.remove();
+  const existingAccPill = document.getElementById('antigravity-account-pill');
+  if (existingAccPill) existingAccPill.remove();
 
   if (window.__aqm_dom_interval) { clearInterval(window.__aqm_dom_interval); window.__aqm_dom_interval = null; }
   if (window.__aqm_token_observer) { window.__aqm_token_observer.disconnect(); window.__aqm_token_observer = null; }
@@ -139,6 +143,123 @@
       .aqm-custom-scroll::-webkit-scrollbar-thumb {
         background: rgba(255, 255, 255, 0.15);
         border-radius: 10px;
+      }
+      /* In-Editor Switcher & Migration Suite Styles */
+      .aqm-switcher-modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.72);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        z-index: 10000000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .aqm-switcher-modal.aqm-active {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .aqm-switcher-sheet {
+        width: 790px;
+        max-width: 95vw;
+        height: 700px;
+        max-height: 90vh;
+        border-radius: 28px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 32px 80px rgba(0,0,0,0.85), 0 0 1px rgba(255,255,255,0.4);
+        transform: scale(0.96) translateY(12px);
+        transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+        user-select: none;
+      }
+      .aqm-switcher-modal.aqm-active .aqm-switcher-sheet {
+        transform: scale(1) translateY(0);
+      }
+      .aqm-sw-tab-btn {
+        padding: 8px 18px;
+        border-radius: 9999px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        border: 1px solid transparent;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .aqm-sw-tab-btn.active {
+        background: rgba(255, 255, 255, 0.16) !important;
+        border-color: rgba(255, 255, 255, 0.3) !important;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+      }
+      .aqm-sw-card {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 20px;
+        padding: 16px;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .aqm-sw-card:hover {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: rgba(255, 255, 255, 0.18);
+        transform: translateY(-1px);
+      }
+      .aqm-sw-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 8px 14px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        background: rgba(255, 255, 255, 0.08);
+        color: inherit;
+      }
+      .aqm-sw-btn:hover {
+        background: rgba(255, 255, 255, 0.14);
+        border-color: rgba(255, 255, 255, 0.3);
+        transform: translateY(-1px);
+      }
+      .aqm-sw-btn:active {
+        transform: scale(0.96);
+      }
+      .aqm-sw-btn-primary {
+        background: linear-gradient(135deg, #3b82f6, #6366f1) !important;
+        border-color: rgba(99, 102, 241, 0.5) !important;
+        color: #ffffff !important;
+        box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4);
+      }
+      .aqm-sw-btn-primary:hover {
+        box-shadow: 0 6px 20px rgba(59, 130, 246, 0.6);
+        filter: brightness(1.1);
+      }
+      .aqm-sw-toast {
+        position: absolute;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%) translateY(-20px);
+        opacity: 0;
+        padding: 8px 18px;
+        border-radius: 9999px;
+        font-size: 12px;
+        font-weight: 700;
+        z-index: 10000005;
+        transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        pointer-events: none;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      }
+      .aqm-sw-toast.show {
+        transform: translateX(-50%) translateY(0);
+        opacity: 1;
       }
     `;
     document.head.appendChild(style);
@@ -1702,9 +1823,7 @@
         e.stopPropagation();
         switcherTrigger.style.transform = 'scale(0.92)';
         setTimeout(() => { switcherTrigger.style.transform = ''; }, 160);
-        fetch('http://127.0.0.1:39281/open_switcher').catch(() => {
-          fetch('http://127.0.0.1:39285/api/state').catch(() => {});
-        });
+        toggleSwitcherModal();
       };
     }
 
@@ -1998,6 +2117,818 @@
     }
   }
 
+
+  // ==========================================
+  // In-Editor Account Switcher & Migration Suite (Madgod-xyz)
+  // ==========================================
+  const SW_I18N = {
+    fa: {
+      appName: "آنتی‌گرویتی سوئیچر",
+      appSubtitle: "سوئیت فوق‌لوکس مدیریت اکانت و مهاجرت پروژه‌ها",
+      tabAccounts: "👤 اکانت‌ها و سهمیه",
+      tabMigration: "⇄ مرکز مهاجرت چت‌ها",
+      activeAccount: "اکانت فعال جاری",
+      saveCurrent: "💾 ذخیره اکانت فعلی",
+      savedAccounts: "اکانت‌های ذخیره‌شده",
+      noSavedAccounts: "هنوز اکانت دیگری ذخیره نشده است. با دکمه بالا، اکانت فعلی خود را ذخیره کنید تا همیشه در دسترس باشد!",
+      switchNow: "⚡️ سوئیچ به این اکانت",
+      deleteAccount: "حذف",
+      addNewAccount: "➕ ورود با اکانت جدید (خروج)",
+      refresh: "🔄 به‌روزرسانی",
+      resetsIn: "⏱ ریست:",
+      targetAccount: "اکانت مقصد برای مهاجرت:",
+      transferMode: "نحوه انتقال دیتا:",
+      modeCopy: "🛡️ کپی ایمن (Safe Copy - نگه‌داشتن در هر دو حساب)",
+      modeCut: "✂️ انتقال قطعی (Cut & Move - حذف از مبدا)",
+      structureMode: "چیدمان در مقصد:",
+      structSeparate: "📁 پروژه‌ها و صفحات مجزا (پیشنهادی)",
+      structMerge: "🔗 تجمیع در یک پروژه واحد (Merge Timeline)",
+      dualSync: "🔄 همگام‌سازی دوطرفه خودکار بین دو اکانت (Continuous Dual-Sync)",
+      selectConvs: "انتخاب مکالمات جهت انتقال:",
+      selectAll: "انتخاب همه",
+      deselectAll: "لغو انتخاب",
+      searchPlaceholder: "جستجو در عنوان یا شناسه مکالمات...",
+      startMigration: "🚀 شروع مهاجرت ایمن مکالمات",
+      migrating: "در حال انتقال مکالمات...",
+      switching: "در حال سوئیچ اکانت و راه‌اندازی مجدد...",
+      migrationDone: "مهاجرت مکالمات با موفقیت انجام شد!",
+      backupNotice: "پشتیبان ایمن در پوشه زیر ایجاد شد:",
+      author: "توسعه داده شده با افتخار توسط Madgod-xyz",
+      pro: "پرو",
+      ultra: "اولترا",
+      free: "معمولی"
+    },
+    en: {
+      appName: "Antigravity Switcher",
+      appSubtitle: "Multi-Account & Project Migration Suite",
+      tabAccounts: "👤 Accounts & Quota",
+      tabMigration: "⇄ Chat & Project Migration",
+      activeAccount: "Active Account",
+      saveCurrent: "💾 Save Current Account",
+      savedAccounts: "Saved Accounts",
+      noSavedAccounts: "No other accounts saved yet. Click 'Save Current' to register your active session!",
+      switchNow: "⚡️ Switch Account",
+      deleteAccount: "Delete",
+      addNewAccount: "➕ Add New Account (Logout)",
+      refresh: "🔄 Refresh",
+      resetsIn: "⏱ Resets:",
+      targetAccount: "Target Account for Migration:",
+      transferMode: "Transfer Mode:",
+      modeCopy: "🛡️ Safe Copy (Keep in both accounts)",
+      modeCut: "✂️ Cut & Move (Remove from source)",
+      structureMode: "Destination Layout:",
+      structSeparate: "📁 Separate Projects (Recommended)",
+      structMerge: "🔗 Merge into Single Master Project",
+      dualSync: "🔄 Continuous Dual-Sync",
+      selectConvs: "Select Conversations to Migrate:",
+      selectAll: "Select All",
+      deselectAll: "Deselect All",
+      searchPlaceholder: "Search conversations or projects...",
+      startMigration: "🚀 Start Safe Migration",
+      migrating: "Migrating conversations...",
+      switching: "Switching account & restarting...",
+      migrationDone: "Migration completed successfully!",
+      backupNotice: "Safe backup created at:",
+      author: "Developed with precision by Madgod-xyz",
+      pro: "PRO",
+      ultra: "ULTRA",
+      free: "FREE"
+    },
+    zh: {
+      appName: "Antigravity 账号切换器",
+      appSubtitle: "多账号管理与项目无缝迁移套件",
+      tabAccounts: "👤 账号与配额",
+      tabMigration: "⇄ 对话与项目迁移",
+      activeAccount: "当前活跃账号",
+      saveCurrent: "💾 保存当前账号",
+      savedAccounts: "已保存账号",
+      noSavedAccounts: "暂未保存其他账号。点击上方按钮保存当前账号！",
+      switchNow: "⚡️ 切换至该账号",
+      deleteAccount: "删除",
+      addNewAccount: "➕ 登录新账号 (注销)",
+      refresh: "🔄 刷新",
+      resetsIn: "⏱ 重置时间：",
+      targetAccount: "迁移目标账号：",
+      transferMode: "迁移模式：",
+      modeCopy: "🛡️ 安全克隆 (Safe Copy - 两端保留)",
+      modeCut: "✂️ 剪切移动 (Cut & Move - 从源端移除)",
+      structureMode: "目标布局：",
+      structSeparate: "📁 独立项目文件夹 (推荐)",
+      structMerge: "🔗 合并至单一主项目",
+      dualSync: "🔄 持续双向自动同步",
+      selectConvs: "选择要迁移的对话：",
+      selectAll: "全选",
+      deselectAll: "取消全选",
+      searchPlaceholder: "搜索对话标题或 ID...",
+      startMigration: "🚀 开始安全迁移",
+      migrating: "正在迁移对话...",
+      switching: "正在切换账号并重启...",
+      migrationDone: "迁移顺利完成！",
+      backupNotice: "安全备份保存在：",
+      author: "由 Madgod-xyz 精心研发",
+      pro: "PRO",
+      ultra: "ULTRA",
+      free: "FREE"
+    },
+    es: {
+      appName: "Antigravity Switcher",
+      appSubtitle: "Suite de Cuentas y Migración de Proyectos",
+      tabAccounts: "👤 Cuentas y Cuota",
+      tabMigration: "⇄ Migración de Chats",
+      activeAccount: "Cuenta Activa",
+      saveCurrent: "💾 Guardar Cuenta Actual",
+      savedAccounts: "Cuentas Guardadas",
+      noSavedAccounts: "No hay cuentas guardadas aún. ¡Haz clic arriba para guardar tu sesión actual!",
+      switchNow: "⚡️ Cambiar a esta cuenta",
+      deleteAccount: "Eliminar",
+      addNewAccount: "➕ Agregar Nueva Cuenta (Cerrar sesión)",
+      refresh: "🔄 Actualizar",
+      resetsIn: "⏱ Se reinicia:",
+      targetAccount: "Cuenta de destino:",
+      transferMode: "Modo de Transferencia:",
+      modeCopy: "🛡️ Copia Segura (Mantener en ambas cuentas)",
+      modeCut: "✂️ Cortar y Mover (Eliminar del origen)",
+      structureMode: "Estructura de Destino:",
+      structSeparate: "📁 Proyectos Separados (Recomendado)",
+      structMerge: "🔗 Fusionar en un Solo Proyecto",
+      dualSync: "🔄 Sincronización Dual Continua",
+      selectConvs: "Seleccionar Conversaciones para Migrar:",
+      selectAll: "Seleccionar Todo",
+      deselectAll: "Deseleccionar Todo",
+      searchPlaceholder: "Buscar conversaciones...",
+      startMigration: "🚀 Iniciar Migración Segura",
+      migrating: "Migrando conversaciones...",
+      switching: "Cambiando de cuenta y reiniciando...",
+      migrationDone: "¡Migración completada con éxito!",
+      backupNotice: "Copia de seguridad guardada en:",
+      author: "Desarrollado con precisión por Madgod-xyz",
+      pro: "PRO",
+      ultra: "ULTRA",
+      free: "GRATIS"
+    }
+  };
+
+  let swState = {
+    activeAccount: null,
+    savedAccounts: {},
+    conversations: [],
+    isLoaded: false,
+    isLoading: false
+  };
+  let swLang = localStorage.getItem('antigravity:switcher_lang') || 'fa';
+  let swTab = 'accounts';
+  let swSelectedConvs = new Set();
+  let swMode = 'copy';
+  let swStructure = 'separate';
+  let swDualSync = false;
+  let swSearch = '';
+  let swTargetAccount = '';
+  let swIsMigrating = false;
+  let swToastTimeout = null;
+
+  function fetchSwitcherState(cb) {
+    if (swState.isLoading) return;
+    swState.isLoading = true;
+    fetch('http://127.0.0.1:39281/api/state')
+      .then(r => r.json())
+      .then(data => {
+        swState.activeAccount = data.activeAccount || null;
+        swState.savedAccounts = data.savedAccounts || {};
+        swState.conversations = data.conversations || [];
+        swState.isLoaded = true;
+        swState.isLoading = false;
+        if (!swTargetAccount && Object.keys(swState.savedAccounts).length > 0) {
+          swTargetAccount = Object.keys(swState.savedAccounts)[0];
+        }
+        if (typeof renderBadge === 'function') renderBadge();
+        const modal = document.getElementById('antigravity-switcher-modal');
+        if (modal && modal.classList.contains('aqm-active')) {
+          renderSwitcherModal();
+        }
+        if (cb) cb();
+      })
+      .catch(err => {
+        swState.isLoading = false;
+        if (cb) cb();
+      });
+  }
+
+  function showSwitcherToast(msg, isError = false) {
+    const modal = document.getElementById('antigravity-switcher-modal');
+    if (!modal) return;
+    let toast = modal.querySelector('.aqm-sw-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.className = 'aqm-sw-toast';
+      modal.appendChild(toast);
+    }
+    toast.textContent = msg;
+    toast.style.background = isError ? 'rgba(239, 68, 68, 0.95)' : 'rgba(16, 185, 129, 0.95)';
+    toast.style.color = '#ffffff';
+    toast.style.border = `1px solid ${isError ? 'rgba(239, 68, 68, 0.6)' : 'rgba(16, 185, 129, 0.6)'}`;
+    toast.classList.add('show');
+    if (swToastTimeout) clearTimeout(swToastTimeout);
+    swToastTimeout = setTimeout(() => { toast.classList.remove('show'); }, 3400);
+  }
+
+  function openSwitcherModal() {
+    let modal = document.getElementById('antigravity-switcher-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'antigravity-switcher-modal';
+      modal.className = 'aqm-switcher-modal';
+      document.body.appendChild(modal);
+
+      modal.onclick = (e) => {
+        if (e.target === modal && !swIsMigrating) closeSwitcherModal();
+      };
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal.classList.contains('aqm-active') && !swIsMigrating) {
+          closeSwitcherModal();
+        }
+      });
+    }
+    modal.classList.add('aqm-active');
+    renderSwitcherModal();
+    fetchSwitcherState(() => {
+      renderSwitcherModal();
+    });
+  }
+
+  function closeSwitcherModal() {
+    const modal = document.getElementById('antigravity-switcher-modal');
+    if (modal) modal.classList.remove('aqm-active');
+  }
+
+  function toggleSwitcherModal() {
+    const modal = document.getElementById('antigravity-switcher-modal');
+    if (modal && modal.classList.contains('aqm-active')) {
+      closeSwitcherModal();
+    } else {
+      openSwitcherModal();
+    }
+  }
+
+  function renderSwitcherModal() {
+    const modal = document.getElementById('antigravity-switcher-modal');
+    if (!modal) return;
+
+    const theme = getActiveTheme();
+    const t = SW_I18N[swLang] || SW_I18N.fa;
+    const isFa = (swLang === 'fa');
+    const dir = isFa ? 'rtl' : 'ltr';
+    const fontFamily = isFa ? "'Vazirmatn', -apple-system, BlinkMacSystemFont, sans-serif" : "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif";
+
+    const activeAcc = swState.activeAccount || {};
+    const email = activeAcc.email || (window.__antigravity_quota && window.__antigravity_quota.email) || 'madgod.cum@gmail.com';
+    const name = activeAcc.name || (email ? email.split('@')[0] : 'Madgod');
+    const avatar = activeAcc.avatar || '';
+    const tier = activeAcc.tier || 'Google AI Pro';
+    const tierCode = (activeAcc.tier_code || 'pro').toLowerCase();
+
+    const sess = activeAcc.session || (window.__antigravity_quota && window.__antigravity_quota.session) || {};
+    const usedPct = Math.round(sess.used_pct ?? 6);
+    const remPct = Math.round(sess.remaining_pct ?? 94);
+    const resetsIn = sess.resets_in || '4 hr 20 min';
+
+    const savedKeys = Object.keys(swState.savedAccounts || {});
+    const savedCount = savedKeys.length;
+
+    // Filter conversations for Migration tab
+    const filteredConvs = (swState.conversations || []).filter(c => {
+      if (!swSearch.trim()) return true;
+      const q = swSearch.toLowerCase();
+      return (c.title && c.title.toLowerCase().includes(q)) || (c.id && c.id.toLowerCase().includes(q));
+    });
+
+    modal.innerHTML = `
+      <div class="aqm-switcher-sheet" style="background:${theme.isDark ? 'rgba(15, 23, 42, 0.95)' : 'rgba(255, 255, 255, 0.95)'};border:1px solid ${theme.cardBorder || 'rgba(255,255,255,0.18)'};backdrop-filter:blur(40px) saturate(190%);-webkit-backdrop-filter:blur(40px) saturate(190%);color:${theme.textColor || '#f8fafc'};font-family:${fontFamily};direction:${dir};">
+        
+        <!-- Header -->
+        <div style="padding:18px 24px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div style="width:36px;height:36px;border-radius:12px;background:linear-gradient(135deg, #38bdf8, #6366f1);display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(99,102,241,0.4);color:#ffffff;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+              </svg>
+            </div>
+            <div>
+              <div style="font-size:15px;font-weight:800;letter-spacing:-0.02em;display:flex;align-items:center;gap:8px;">
+                <span>${t.appName}</span>
+                <span style="font-size:9.5px;padding:2px 7px;border-radius:9999px;background:rgba(99,102,241,0.2);color:#818cf8;border:1px solid rgba(99,102,241,0.3);font-weight:700;">v2.0 PRO</span>
+              </div>
+              <div style="font-size:11px;color:${theme.subText || '#94a3b8'};opacity:0.85;">${t.author}</div>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:10px;">
+            <!-- Language Pills -->
+            <div style="display:flex;padding:3px;border-radius:9999px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.1);">
+              <button class="aqm-lang-btn ${swLang === 'fa' ? 'active' : ''}" data-lang="fa" style="background:${swLang === 'fa' ? 'rgba(255,255,255,0.18)' : 'transparent'};border:none;color:${theme.textColor || '#fff'};padding:3px 9px;border-radius:9999px;font-size:11px;font-weight:700;cursor:pointer;">🇮🇷 فا</button>
+              <button class="aqm-lang-btn ${swLang === 'en' ? 'active' : ''}" data-lang="en" style="background:${swLang === 'en' ? 'rgba(255,255,255,0.18)' : 'transparent'};border:none;color:${theme.textColor || '#fff'};padding:3px 9px;border-radius:9999px;font-size:11px;font-weight:700;cursor:pointer;">🇺🇸 EN</button>
+              <button class="aqm-lang-btn ${swLang === 'zh' ? 'active' : ''}" data-lang="zh" style="background:${swLang === 'zh' ? 'rgba(255,255,255,0.18)' : 'transparent'};border:none;color:${theme.textColor || '#fff'};padding:3px 9px;border-radius:9999px;font-size:11px;font-weight:700;cursor:pointer;">🇨🇳 中</button>
+              <button class="aqm-lang-btn ${swLang === 'es' ? 'active' : ''}" data-lang="es" style="background:${swLang === 'es' ? 'rgba(255,255,255,0.18)' : 'transparent'};border:none;color:${theme.textColor || '#fff'};padding:3px 9px;border-radius:9999px;font-size:11px;font-weight:700;cursor:pointer;">🇪🇸 ES</button>
+            </div>
+
+            <!-- Close Button -->
+            <button id="aqm-sw-modal-close" style="width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);color:${theme.textColor || '#fff'};cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;transition:all 0.2s;">✕</button>
+          </div>
+        </div>
+
+        <!-- Segmented Navigation Tabs -->
+        <div style="padding:10px 24px;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;gap:8px;background:rgba(0,0,0,0.12);flex-shrink:0;">
+          <button class="aqm-sw-tab-btn ${swTab === 'accounts' ? 'active' : ''}" id="aqm-tab-btn-accounts" style="color:${theme.textColor || '#fff'};">
+            <span>👤</span>
+            <span>${t.tabAccounts}</span>
+          </button>
+          <button class="aqm-sw-tab-btn ${swTab === 'migration' ? 'active' : ''}" id="aqm-tab-btn-migration" style="color:${theme.textColor || '#fff'};">
+            <span>⇄</span>
+            <span>${t.tabMigration}</span>
+            <span style="font-size:9.5px;padding:1px 6px;border-radius:9999px;background:rgba(59,130,246,0.25);color:#60a5fa;border:1px solid rgba(59,130,246,0.4);">${(swState.conversations || []).length}</span>
+          </button>
+        </div>
+
+        <!-- Content Body (Scrollable) -->
+        <div class="aqm-custom-scroll" style="flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:18px;">
+          
+          ${swTab === 'accounts' ? `
+            <!-- ACTIVE ACCOUNT HERO CARD -->
+            <div class="aqm-sw-card" style="background:linear-gradient(135deg, rgba(30,41,59,0.7), rgba(15,23,42,0.85));border:1px solid rgba(255,255,255,0.14);box-shadow:0 10px 30px rgba(0,0,0,0.3);">
+              
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+                <div style="display:flex;align-items:center;gap:14px;">
+                  <div style="position:relative;">
+                    ${avatar ? `<img src="${avatar}" style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:2px solid #38bdf8;box-shadow:0 0 16px rgba(56,189,248,0.4);" />` : `
+                      <div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg, #6366f1, #3b82f6);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:#fff;border:2px solid #38bdf8;">${name[0] || 'A'}</div>
+                    `}
+                    <div style="position:absolute;bottom:0;right:0;width:12px;height:12px;border-radius:50%;background:#10b981;border:2px solid #0f172a;box-shadow:0 0 8px #10b981;"></div>
+                  </div>
+                  <div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      <span style="font-size:16px;font-weight:800;letter-spacing:-0.02em;">${name}</span>
+                      <span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:9999px;background:rgba(251,191,36,0.2);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);text-transform:uppercase;">${tier}</span>
+                    </div>
+                    <div style="font-size:12px;color:${theme.subText || '#94a3b8'};opacity:0.9;" dir="ltr">${email}</div>
+                  </div>
+                </div>
+
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-save-current-btn">
+                    <span>💾</span>
+                    <span>${t.saveCurrent}</span>
+                  </button>
+                  <button class="aqm-sw-btn" id="aqm-sw-refresh-btn" title="${t.refresh}">
+                    <span>🔄</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Live Quota Gauge -->
+              <div style="background:rgba(0,0,0,0.3);border-radius:14px;padding:12px 16px;border:1px solid rgba(255,255,255,0.08);margin-bottom:14px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:12px;">
+                  <span style="font-weight:700;display:flex;align-items:center;gap:6px;">
+                    <span style="color:#fbbf24;">⚡️</span>
+                    <span>Gemini 3.8 Flash & Pro</span>
+                  </span>
+                  <span style="color:#94a3b8;font-size:11px;">${t.resetsIn} <b style="color:#f8fafc;" dir="ltr">${resetsIn}</b></span>
+                </div>
+                <div style="height:7px;border-radius:9999px;background:rgba(255,255,255,0.08);overflow:hidden;margin-bottom:8px;">
+                  <div style="height:100%;width:${remPct}%;background:linear-gradient(90deg, #10b981, #38bdf8);border-radius:9999px;box-shadow:0 0 10px rgba(56,189,248,0.5);"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:${theme.subText || '#94a3b8'};">
+                  <span>${remPct}% باقی‌مانده</span>
+                  <span>${usedPct}% مصرف‌شده</span>
+                </div>
+              </div>
+
+              <!-- Models Pool Chips -->
+              <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:8px;">
+                ${((activeAcc.pools && activeAcc.pools.length > 0) ? activeAcc.pools : [
+                  { name: 'Gemini 3.8 Flash High', remaining_pct: remPct, resets_in: resetsIn },
+                  { name: 'Gemini 3.1 Pro', remaining_pct: remPct, resets_in: resetsIn },
+                  { name: 'Claude Sonnet 4.6', remaining_pct: 100, resets_in: '4 hr 59 min' },
+                  { name: 'GPT-OSS 120B', remaining_pct: 100, resets_in: '4 hr 59 min' }
+                ]).map(p => `
+                  <div style="padding:8px 12px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;gap:3px;">
+                    <span style="font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.name}</span>
+                    <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#94a3b8;">
+                      <span style="color:#10b981;font-weight:800;" dir="ltr">${p.remaining_pct}%</span>
+                      <span dir="ltr">${p.resets_in || ''}</span>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+
+            </div>
+
+            <!-- SAVED ACCOUNTS LIST -->
+            <div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <h3 style="margin:0;font-size:14px;font-weight:800;">${t.savedAccounts}</h3>
+                  <span style="font-size:10.5px;padding:2px 7px;border-radius:9999px;background:rgba(255,255,255,0.08);color:#94a3b8;font-weight:700;">${savedCount}</span>
+                </div>
+                <button class="aqm-sw-btn" id="aqm-sw-add-new-btn" style="padding:5px 12px;font-size:11.5px;">
+                  <span>➕</span>
+                  <span>${t.addNewAccount}</span>
+                </button>
+              </div>
+
+              ${savedCount === 0 ? `
+                <div class="aqm-sw-card" style="text-align:center;padding:28px 20px;border-style:dashed;">
+                  <div style="font-size:32px;margin-bottom:8px;">💾</div>
+                  <div style="font-size:13px;font-weight:700;margin-bottom:4px;">${t.noSavedAccounts}</div>
+                  <div style="font-size:11.5px;color:#94a3b8;margin-bottom:14px;">با ذخیره کردن اکانت، می‌توانید هر زمان که بخواهید با یک کلیک بین اکانت‌ها جابجا شوید.</div>
+                  <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-save-current-empty-btn">
+                    <span>💾</span>
+                    <span>${t.saveCurrent}</span>
+                  </button>
+                </div>
+              ` : `
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                  ${savedKeys.map(k => {
+                    const acc = swState.savedAccounts[k];
+                    const isCur = (acc.email && acc.email.toLowerCase() === email.toLowerCase());
+                    return `
+                      <div class="aqm-sw-card" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;${isCur ? 'border-color:rgba(56,189,248,0.4);background:rgba(56,189,248,0.04);' : ''}">
+                        <div style="display:flex;align-items:center;gap:12px;">
+                          <div style="width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;border:1px solid rgba(255,255,255,0.15);">
+                            ${(acc.email || k)[0].toUpperCase()}
+                          </div>
+                          <div>
+                            <div style="display:flex;align-items:center;gap:8px;">
+                              <span style="font-size:13px;font-weight:700;" dir="ltr">${acc.email || k}</span>
+                              <span style="font-size:9.5px;padding:1px 6px;border-radius:9999px;background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.3);text-transform:uppercase;">${acc.tier || 'PRO'}</span>
+                              ${isCur ? `<span style="font-size:9.5px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.2);color:#10b981;font-weight:800;">فعال</span>` : ''}
+                            </div>
+                            <div style="font-size:11px;color:#94a3b8;">${acc.name || ''} ${acc.saved_at ? `• ذخیره: ${acc.saved_at.split(' ')[0]}` : ''}</div>
+                          </div>
+                        </div>
+
+                        <div style="display:flex;align-items:center;gap:8px;">
+                          ${!isCur ? `
+                            <button class="aqm-sw-btn aqm-sw-btn-primary" data-action="switch" data-acc="${k}" style="padding:6px 12px;font-size:11px;">
+                              <span>⚡️</span>
+                              <span>${t.switchNow}</span>
+                            </button>
+                          ` : ''}
+                          <button class="aqm-sw-btn" data-action="prep-migrate" data-acc="${k}" title="مهاجرت به این اکانت" style="padding:6px 10px;font-size:11px;">
+                            <span>⇄</span>
+                          </button>
+                          <button class="aqm-sw-btn" data-action="delete" data-acc="${k}" title="${t.deleteAccount}" style="padding:6px 10px;font-size:11px;color:#ef4444;">
+                            <span>🗑️</span>
+                          </button>
+                        </div>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              `}
+            </div>
+          ` : `
+            <!-- MIGRATION HUB TAB -->
+            <div style="display:flex;flex-direction:column;gap:14px;">
+              
+              <!-- Notice Card -->
+              <div class="aqm-sw-card" style="background:rgba(59,130,246,0.06);border-color:rgba(59,130,246,0.25);padding:14px 18px;">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+                  <span style="font-size:20px;">🚀</span>
+                  <div style="font-size:13.5px;font-weight:800;color:#60a5fa;">${t.tabMigration}</div>
+                </div>
+                <div style="font-size:11.5px;color:#cbd5e1;line-height:1.6;">
+                  انتقال، کپی ایمن، یا تجمیع پروژه‌ها، گفت‌وگوهای ایجنت، و دیتابیس‌های سشن بین اکانت‌های گوگل با حفظ ۱۰۰٪ کامل داده‌ها و آرتیفکت‌های مغز ایجنت (Brain).
+                </div>
+              </div>
+
+              <!-- Options Grid -->
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                
+                <!-- Target Account Dropdown -->
+                <div class="aqm-sw-card" style="padding:14px;">
+                  <label style="font-size:12px;font-weight:800;margin-bottom:8px;display:block;">${t.targetAccount}</label>
+                  <select id="aqm-sw-target-select" style="width:100%;padding:8px 12px;border-radius:12px;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.18);color:#fff;font-size:12px;outline:none;" dir="ltr">
+                    ${savedKeys.length > 0 ? savedKeys.map(k => `
+                      <option value="${k}" ${k === swTargetAccount ? 'selected' : ''}>${swState.savedAccounts[k].email || k} (${swState.savedAccounts[k].tier || 'Pro'})</option>
+                    `).join('') : `
+                      <option value="">ابتدا یک اکانت مقصد در تب اکانت‌ها ذخیره کنید</option>
+                    `}
+                  </select>
+                </div>
+
+                <!-- Transfer Mode -->
+                <div class="aqm-sw-card" style="padding:14px;">
+                  <label style="font-size:12px;font-weight:800;margin-bottom:8px;display:block;">${t.transferMode}</label>
+                  <div style="display:flex;gap:6px;">
+                    <button class="aqm-sw-btn ${swMode === 'copy' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-mode-copy" style="flex:1;padding:7px 8px;font-size:11px;">
+                      <span>🛡️</span>
+                      <span>کپی ایمن</span>
+                    </button>
+                    <button class="aqm-sw-btn ${swMode === 'move' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-mode-move" style="flex:1;padding:7px 8px;font-size:11px;">
+                      <span>✂️</span>
+                      <span>انتقال و برش</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Structure Mode -->
+                <div class="aqm-sw-card" style="padding:14px;">
+                  <label style="font-size:12px;font-weight:800;margin-bottom:8px;display:block;">${t.structureMode}</label>
+                  <div style="display:flex;gap:6px;">
+                    <button class="aqm-sw-btn ${swStructure === 'separate' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-struct-sep" style="flex:1;padding:7px 8px;font-size:11px;">
+                      <span>📁</span>
+                      <span>پروژه‌های مجزا</span>
+                    </button>
+                    <button class="aqm-sw-btn ${swStructure === 'merge' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-struct-merge" style="flex:1;padding:7px 8px;font-size:11px;">
+                      <span>🔗</span>
+                      <span>ادغام پروژه‌ها</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Dual-Sync -->
+                <div class="aqm-sw-card" style="padding:14px;display:flex;align-items:center;justify-content:space-between;">
+                  <div>
+                    <div style="font-size:12px;font-weight:800;margin-bottom:2px;">همگام‌سازی دوطرفه</div>
+                    <div style="font-size:10.5px;color:#94a3b8;">سینک تغییرات آتی در هر دو حساب</div>
+                  </div>
+                  <input type="checkbox" id="aqm-sw-dual-sync" ${swDualSync ? 'checked' : ''} style="width:18px;height:18px;accent-color:#3b82f6;cursor:pointer;" />
+                </div>
+
+              </div>
+
+              <!-- Conversation Selector List -->
+              <div class="aqm-sw-card" style="padding:16px;">
+                
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px;">
+                  <input type="text" id="aqm-sw-search-input" value="${swSearch}" placeholder="${t.searchPlaceholder}" style="flex:1;padding:8px 14px;border-radius:12px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.12);color:#fff;font-size:12px;outline:none;" />
+                  <button class="aqm-sw-btn" id="aqm-sw-select-all-btn" style="padding:7px 12px;font-size:11px;">
+                    ${swSelectedConvs.size === filteredConvs.length && filteredConvs.length > 0 ? t.deselectAll : t.selectAll} (${swSelectedConvs.size})
+                  </button>
+                </div>
+
+                <div class="aqm-custom-scroll" style="max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;">
+                  ${filteredConvs.length === 0 ? `
+                    <div style="text-align:center;padding:24px;color:#94a3b8;font-size:12px;">هیچ مکالمه‌ای یافت نشد.</div>
+                  ` : filteredConvs.map(c => {
+                    const isChecked = swSelectedConvs.has(c.id);
+                    return `
+                      <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:10px;background:${isChecked ? 'rgba(59,130,246,0.12)' : 'rgba(255,255,255,0.02)'};border:1px solid ${isChecked ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.05)'};cursor:pointer;transition:all 0.15s;">
+                        <input type="checkbox" data-cid="${c.id}" class="aqm-conv-checkbox" ${isChecked ? 'checked' : ''} style="width:16px;height:16px;accent-color:#3b82f6;cursor:pointer;" />
+                        <div style="flex:1;overflow:hidden;">
+                          <div style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.title || c.id}</div>
+                          <div style="font-size:10px;color:#94a3b8;display:flex;gap:10px;">
+                            <span dir="ltr">${c.last_modified || ''}</span>
+                            <span>${c.size_kb} KB</span>
+                            ${c.has_brain ? `<span style="color:#a855f7;">• Brain: فعال</span>` : ''}
+                          </div>
+                        </div>
+                      </label>
+                    `;
+                  }).join('')}
+                </div>
+
+              </div>
+
+              <!-- Start Migration Button -->
+              <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-start-migration-btn" style="padding:12px;font-size:13px;border-radius:14px;box-shadow:0 6px 20px rgba(59,130,246,0.4);" ${swIsMigrating ? 'disabled' : ''}>
+                <span>${swIsMigrating ? '⏳' : '🚀'}</span>
+                <span>${swIsMigrating ? t.migrating : `${t.startMigration} (${swSelectedConvs.size} مکالمه)`}</span>
+              </button>
+
+            </div>
+          `}
+
+        </div>
+
+        <!-- Footer -->
+        <div style="padding:12px 24px;border-top:1px solid rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:space-between;font-size:11px;color:${theme.subText || '#94a3b8'};background:rgba(0,0,0,0.15);flex-shrink:0;">
+          <div>
+            <span>${t.author} • </span>
+            <a href="https://github.com/Madgod-xyz/antigravity-account-switcher" target="_blank" style="color:#38bdf8;text-decoration:none;font-weight:700;">GitHub Repository</a>
+          </div>
+          <div style="opacity:0.8;">iOS Liquid Glass Engine</div>
+        </div>
+
+      </div>
+    `;
+
+    // Wire Event Listeners
+    const closeBtn = modal.querySelector('#aqm-sw-modal-close');
+    if (closeBtn) closeBtn.onclick = closeSwitcherModal;
+
+    modal.querySelectorAll('.aqm-lang-btn').forEach(btn => {
+      btn.onclick = () => {
+        const lang = btn.getAttribute('data-lang');
+        swLang = lang;
+        try { localStorage.setItem('antigravity:switcher_lang', lang); } catch(e){}
+        renderSwitcherModal();
+      };
+    });
+
+    const tabAcc = modal.querySelector('#aqm-tab-btn-accounts');
+    if (tabAcc) tabAcc.onclick = () => { swTab = 'accounts'; renderSwitcherModal(); };
+    const tabMig = modal.querySelector('#aqm-tab-btn-migration');
+    if (tabMig) tabMig.onclick = () => { swTab = 'migration'; renderSwitcherModal(); };
+
+    // Accounts tab actions
+    const saveCurBtn = modal.querySelector('#aqm-sw-save-current-btn') || modal.querySelector('#aqm-sw-save-current-empty-btn');
+    if (saveCurBtn) {
+      saveCurBtn.onclick = () => {
+        saveCurBtn.style.transform = 'scale(0.95)';
+        setTimeout(() => { saveCurBtn.style.transform = ''; }, 150);
+        showSwitcherToast('در حال ذخیره اکانت...');
+        fetch('http://127.0.0.1:39281/api/save', { method: 'POST' })
+          .then(r => r.json())
+          .then(res => {
+            if (res.success) {
+              showSwitcherToast(t.accountSaved || 'اکانت با موفقیت ذخیره شد!');
+              fetchSwitcherState(() => { renderSwitcherModal(); });
+            } else {
+              showSwitcherToast(res.error || 'خطا در ذخیره اکانت', true);
+            }
+          })
+          .catch(err => {
+            showSwitcherToast('ارتباط با دیمن برقرار نشد', true);
+          });
+      };
+    }
+
+    const refreshBtn = modal.querySelector('#aqm-sw-refresh-btn');
+    if (refreshBtn) {
+      refreshBtn.onclick = () => {
+        refreshBtn.style.transform = 'rotate(180deg)';
+        setTimeout(() => { refreshBtn.style.transform = ''; }, 300);
+        fetchSwitcherState(() => {
+          showSwitcherToast('سهمیه و اکانت‌ها به‌روزرسانی شدند');
+          renderSwitcherModal();
+        });
+      };
+    }
+
+    const addNewBtn = modal.querySelector('#aqm-sw-add-new-btn');
+    if (addNewBtn) {
+      addNewBtn.onclick = () => {
+        if (confirm('آیا مایل به خروج از حساب فعلی جهت ورود با اکانت جدید هستید؟')) {
+          showSwitcherToast('در حال خروج...');
+          fetch('http://127.0.0.1:39281/api/logout', { method: 'POST' });
+        }
+      };
+    }
+
+    // Saved accounts click actions
+    modal.querySelectorAll('[data-action="switch"]').forEach(b => {
+      b.onclick = () => {
+        const accKey = b.getAttribute('data-acc');
+        showSwitcherToast(t.switching || 'در حال اعمال اکانت و راه‌اندازی مجدد...');
+        fetch('http://127.0.0.1:39281/api/switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountKey: accKey })
+        });
+      };
+    });
+
+    modal.querySelectorAll('[data-action="prep-migrate"]').forEach(b => {
+      b.onclick = () => {
+        swTargetAccount = b.getAttribute('data-acc');
+        swTab = 'migration';
+        renderSwitcherModal();
+      };
+    });
+
+    modal.querySelectorAll('[data-action="delete"]').forEach(b => {
+      b.onclick = () => {
+        const accKey = b.getAttribute('data-acc');
+        if (confirm(`آیا از حذف اکانت ${accKey} مطمئن هستید؟`)) {
+          fetch('http://127.0.0.1:39281/api/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accountKey: accKey })
+          }).then(() => {
+            showSwitcherToast('اکانت حذف شد.');
+            fetchSwitcherState(() => { renderSwitcherModal(); });
+          });
+        }
+      };
+    });
+
+    // Migration tab actions
+    const targetSelect = modal.querySelector('#aqm-sw-target-select');
+    if (targetSelect) {
+      targetSelect.onchange = () => { swTargetAccount = targetSelect.value; };
+    }
+
+    const modeCopyBtn = modal.querySelector('#aqm-sw-mode-copy');
+    if (modeCopyBtn) {
+      modeCopyBtn.onclick = () => { swMode = 'copy'; renderSwitcherModal(); };
+    }
+    const modeMoveBtn = modal.querySelector('#aqm-sw-mode-move');
+    if (modeMoveBtn) {
+      modeMoveBtn.onclick = () => { swMode = 'move'; renderSwitcherModal(); };
+    }
+
+    const structSepBtn = modal.querySelector('#aqm-sw-struct-sep');
+    if (structSepBtn) {
+      structSepBtn.onclick = () => { swStructure = 'separate'; renderSwitcherModal(); };
+    }
+    const structMergeBtn = modal.querySelector('#aqm-sw-struct-merge');
+    if (structMergeBtn) {
+      structMergeBtn.onclick = () => { swStructure = 'merge'; renderSwitcherModal(); };
+    }
+
+    const dualSyncCheck = modal.querySelector('#aqm-sw-dual-sync');
+    if (dualSyncCheck) {
+      dualSyncCheck.onchange = () => { swDualSync = dualSyncCheck.checked; };
+    }
+
+    const searchInput = modal.querySelector('#aqm-sw-search-input');
+    if (searchInput) {
+      searchInput.oninput = () => {
+        swSearch = searchInput.value;
+        renderSwitcherModal();
+        const freshInput = modal.querySelector('#aqm-sw-search-input');
+        if (freshInput) {
+          freshInput.focus();
+          freshInput.setSelectionRange(freshInput.value.length, freshInput.value.length);
+        }
+      };
+    }
+
+    const selectAllBtn = modal.querySelector('#aqm-sw-select-all-btn');
+    if (selectAllBtn) {
+      selectAllBtn.onclick = () => {
+        if (swSelectedConvs.size === filteredConvs.length && filteredConvs.length > 0) {
+          swSelectedConvs.clear();
+        } else {
+          filteredConvs.forEach(c => swSelectedConvs.add(c.id));
+        }
+        renderSwitcherModal();
+      };
+    }
+
+    modal.querySelectorAll('.aqm-conv-checkbox').forEach(cb => {
+      cb.onchange = () => {
+        const cid = cb.getAttribute('data-cid');
+        if (cb.checked) swSelectedConvs.add(cid);
+        else swSelectedConvs.delete(cid);
+        renderSwitcherModal();
+      };
+    });
+
+    const startMigrateBtn = modal.querySelector('#aqm-sw-start-migration-btn');
+    if (startMigrateBtn) {
+      startMigrateBtn.onclick = () => {
+        if (swSelectedConvs.size === 0) {
+          showSwitcherToast('لطفاً حداقل یک مکالمه را انتخاب کنید', true);
+          return;
+        }
+        if (!swTargetAccount) {
+          showSwitcherToast('لطفاً اکانت مقصد را انتخاب کنید', true);
+          return;
+        }
+
+        swIsMigrating = true;
+        renderSwitcherModal();
+        showSwitcherToast(t.migrating);
+
+        fetch('http://127.0.0.1:39281/api/migrate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            conversationIds: Array.from(swSelectedConvs),
+            sourceAccount: email,
+            targetAccount: swTargetAccount,
+            mode: swMode,
+            structure: swStructure,
+            dualSync: swDualSync
+          })
+        })
+        .then(r => r.json())
+        .then(res => {
+          swIsMigrating = false;
+          if (res.success) {
+            showSwitcherToast(`${t.migrationDone} (${res.migrated_count} پروژه منتقل شد)`);
+            swSelectedConvs.clear();
+            fetchSwitcherState(() => { renderSwitcherModal(); });
+          } else {
+            showSwitcherToast(res.error || 'خطا در مهاجرت چت‌ها', true);
+            renderSwitcherModal();
+          }
+        })
+        .catch(err => {
+          swIsMigrating = false;
+          showSwitcherToast('ارتباط با دیمن مهاجرت برقرار نشد', true);
+          renderSwitcherModal();
+        });
+      };
+    }
+  }
+
+  // Pre-fetch switcher state on start
+  setTimeout(() => {
+    fetchSwitcherState();
+  }, 1000);
+
   function renderBadge() {
     const trigger = document.querySelector('[data-testid="model-selector-trigger"]');
     if (!trigger) return;
@@ -2093,6 +3024,61 @@
 
     pill.onclick = togglePopover;
 
+    // 3. Floating Account Capsule Pill (In-Editor Native Switcher Trigger)
+    let accPill = document.getElementById('antigravity-account-pill');
+    if (!accPill) {
+      accPill = document.createElement('button');
+      accPill.id = 'antigravity-account-pill';
+      accPill.type = 'button';
+      pill.insertAdjacentElement('afterend', accPill);
+    }
+
+    accPill.style.display = 'inline-flex';
+    accPill.style.alignItems = 'center';
+    accPill.style.gap = '6px';
+    accPill.style.marginLeft = '7px';
+    accPill.style.padding = '0 10px';
+    accPill.style.height = '28px';
+    accPill.style.borderRadius = '9999px';
+    accPill.style.fontSize = '11px';
+    accPill.style.fontWeight = '700';
+    accPill.style.fontFamily = `'Vazirmatn', ${fullFamily}`;
+    accPill.style.background = theme.pillBg || 'rgba(15, 23, 42, 0.75)';
+    accPill.style.border = `1px solid ${theme.pillBorder || 'rgba(255, 255, 255, 0.16)'}`;
+    accPill.style.color = theme.textColor || '#f1f5f9';
+    accPill.style.boxShadow = `inset 0 1px 1px rgba(255,255,255,0.18), 0 4px 14px rgba(0,0,0,0.3)`;
+    accPill.style.cursor = 'pointer';
+    accPill.style.userSelect = 'none';
+    accPill.style.transition = 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)';
+
+    const accUser = swState.activeAccount || {};
+    const accEmail = accUser.email || currentUsage.email || 'madgod.cum@gmail.com';
+    const accName = accUser.name || (accEmail ? accEmail.split('@')[0] : 'Madgod');
+    const accAvatar = accUser.avatar || '';
+    const accTier = accUser.tier || 'Google AI Pro';
+    const accTierCode = (accUser.tier_code || 'pro').toLowerCase();
+
+    const tierBadgeBg = accTierCode === 'ultra' ? 'linear-gradient(135deg, #ec4899, #8b5cf6)' : (accTierCode === 'pro' ? 'linear-gradient(135deg, rgba(245,158,11,0.25), rgba(217,119,6,0.35))' : 'rgba(148,163,184,0.15)');
+    const tierBadgeColor = accTierCode === 'ultra' ? '#ffffff' : (accTierCode === 'pro' ? '#fbbf24' : '#94a3b8');
+    const tierBadgeBorder = accTierCode === 'ultra' ? 'rgba(236,72,153,0.5)' : (accTierCode === 'pro' ? 'rgba(251,191,36,0.45)' : 'rgba(148,163,184,0.25)');
+
+    accPill.title = `اکانت فعال: ${accEmail} (${accTier})\nبرای سوئیچ اکانت یا جابجایی پروژه‌ها کلیک کنید`;
+    accPill.innerHTML = `
+      <span style="width:6px;height:6px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
+      ${accAvatar ? `<img src="${accAvatar}" style="width:17px;height:17px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,255,255,0.3);" />` : `<span style="font-size:11px;">⚡️</span>`}
+      <span style="letter-spacing:-0.01em;font-weight:700;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" dir="ltr">${accName}</span>
+      <span style="font-size:9px;font-weight:800;padding:1px 6px;border-radius:9999px;background:${tierBadgeBg};color:${tierBadgeColor};border:1px solid ${tierBadgeBorder};text-transform:uppercase;letter-spacing:0.02em;">${accTierCode.toUpperCase()}</span>
+      <span style="font-size:8px;opacity:0.6;margin-left:1px;">▼</span>
+    `;
+
+    accPill.onclick = (e) => {
+      e.stopPropagation();
+      toggleSwitcherModal();
+    };
+
+    accPill.onmouseenter = () => { accPill.style.transform = 'translateY(-1px) scale(1.02)'; };
+    accPill.onmouseleave = () => { accPill.style.transform = ''; };
+
     const pop = document.getElementById('antigravity-usage-popover');
     if (pop && pop.style.display !== 'none' && !pop.matches(':hover')) {
       renderPopover();
@@ -2137,7 +3123,8 @@
       const trigger = document.querySelector('[data-testid="model-selector-trigger"]');
       const badge = document.getElementById('antigravity-usage-badge');
       const pill = document.getElementById('antigravity-usage-pill');
-      if (trigger && (!badge || !pill)) {
+      const accPill = document.getElementById('antigravity-account-pill');
+      if (trigger && (!badge || !pill || !accPill)) {
         renderBadge();
       }
 

@@ -274,6 +274,44 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                 self.send_header('Connection', 'close')
                 self.end_headers()
                 self.wfile.write(b'{"status":"opened"}')
+            elif self.path in ('/api/state', '/api/accounts'):
+                # Return active account, saved accounts manifest, and conversations
+                resp_data = {'activeAccount': None, 'savedAccounts': {}, 'conversations': []}
+                try:
+                    import quota_engine as q_eng
+                    import migration_engine as m_eng
+                    resp_data['activeAccount'] = q_eng.fetch_quota_and_tier() if hasattr(q_eng, 'fetch_quota_and_tier') else {}
+                    resp_data['conversations'] = m_eng.list_conversations() if hasattr(m_eng, 'list_conversations') else []
+                except Exception as e:
+                    pass
+                
+                man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
+                if man_path.exists():
+                    try:
+                        with open(man_path, 'r', encoding='utf-8') as f:
+                            resp_data['savedAccounts'] = json.load(f)
+                    except Exception:
+                        pass
+
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(json.dumps(resp_data, ensure_ascii=False).encode('utf-8'))
+            elif self.path == '/api/conversations':
+                convs = []
+                try:
+                    import migration_engine as m_eng
+                    convs = m_eng.list_conversations()
+                except Exception:
+                    pass
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(json.dumps(convs, ensure_ascii=False).encode('utf-8'))
             else:
                 self.send_response(404)
                 self.send_header('Connection', 'close')
@@ -286,16 +324,70 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def do_POST(self):
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length).decode('utf-8') if length > 0 else '{}'
+        try:
+            data = json.loads(body)
+        except Exception:
+            data = {}
+
+        resp = {'success': False}
+
+        try:
+            import server as srv_mod
+            if self.path == '/api/switch':
+                resp = srv_mod.switch_account(data.get('accountKey'))
+            elif self.path == '/api/save':
+                resp = srv_mod.save_current_account()
+            elif self.path == '/api/logout':
+                resp = srv_mod.logout_account()
+            elif self.path == '/api/delete':
+                m = srv_mod.load_manifest()
+                ak = data.get('accountKey')
+                if ak in m:
+                    del m[ak]
+                    srv_mod.save_manifest(m)
+                    resp = {'success': True}
+            elif self.path == '/api/migrate':
+                import migration_engine as m_eng
+                resp = m_eng.migrate_conversations(
+                    data.get('conversationIds', []),
+                    data.get('sourceAccount'),
+                    data.get('targetAccount'),
+                    mode=data.get('mode', 'copy'),
+                    structure=data.get('structure', 'separate'),
+                    dual_sync=data.get('dualSync', False)
+                )
+        except Exception as e:
+            resp = {'success': False, 'error': str(e)}
+
+        try:
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(json.dumps(resp, ensure_ascii=False).encode('utf-8'))
+        except Exception:
+            pass
+
     def log_message(self, format, *args):
         pass
 
 def start_http_server(port=39281):
-    try:
-        server = ThreadingHTTPServer(('127.0.0.1', port), QuotaHttpHandler)
-        server.daemon_threads = True
-        server.serve_forever()
-    except Exception as e:
-        print(f"[ERROR] HTTP server failed on port {port}: {e}", flush=True)
+    ThreadingHTTPServer.allow_reuse_address = True
+    for attempt in range(6):
+        try:
+            server = ThreadingHTTPServer(('127.0.0.1', port), QuotaHttpHandler)
+            server.daemon_threads = True
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [INFO] HTTP server successfully listening on port {port}", flush=True)
+            server.serve_forever()
+            break
+        except Exception as e:
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [WARN] HTTP server bind attempt {attempt+1} failed: {e}", flush=True)
+            time.sleep(1.5)
+
 
 def daemon_loop():
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [INFO] Antigravity Quota Monitor on-demand daemon active.", flush=True)
