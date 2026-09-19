@@ -7,3 +7,5 @@ dev-tools/
 *.tmp
 .env
 .env.*
+app/
+switcher_core.py

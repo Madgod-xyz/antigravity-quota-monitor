@@ -257,6 +257,43 @@ def fetch_quota_and_tier(token_str=None):
         except Exception:
             pass
 
+        # If email not found in userinfo, try extracting from id_token JWT in token_str
+        if not email and token_str:
+            try:
+                t_json = json.loads(token_str) if token_str.startswith('{') else {}
+                id_tok = t_json.get('id_token')
+                if id_tok and '.' in id_tok:
+                    payload_part = id_tok.split('.')[1]
+                    payload_part += '=' * (-len(payload_part) % 4)
+                    claims = json.loads(base64.b64decode(payload_part).decode('utf-8'))
+                    email = claims.get('email')
+            except Exception:
+                pass
+
+        # If still not found, check manifest.json for matching refresh token
+        if not email and refresh_token:
+            try:
+                man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
+                if man_path.exists():
+                    with open(man_path, 'r', encoding='utf-8') as mf:
+                        m_data = json.load(mf)
+                        for m_acc, m_info in m_data.items():
+                            tf = m_info.get('token_file')
+                            if tf and os.path.exists(tf):
+                                with open(tf, 'r', encoding='utf-8') as tff:
+                                    if refresh_token in tff.read():
+                                        email = m_acc
+                                        break
+            except Exception:
+                pass
+
+        # Compute clean short display name (strictly short Gmail username)
+        clean_name = "User"
+        if email and '@' in email:
+            clean_name = email.split('@')[0].split('.')[0].capitalize()
+        elif user_name:
+            clean_name = user_name.split()[0].capitalize()
+
         # Model parsing
         models = models_data.get('models', {})
         pools_map = {}
@@ -316,7 +353,7 @@ def fetch_quota_and_tier(token_str=None):
 
         return {
             'email': email or 'Unknown',
-            'name': user_name or (email.split('@')[0] if email else 'User'),
+            'name': clean_name,
             'avatar': avatar_url or '',
             'tier': tier_name,
             'tier_code': tier_code,

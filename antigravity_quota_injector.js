@@ -26,6 +26,10 @@
   // 1. Inject Diverse Typography: Estedad, Vazirmatn, Sahel, Shabnam, Samim, Lalezar, Noto Sans Arabic, Outfit, Space Grotesk, JetBrains Mono, Inter, Fredoka, Quicksand
   const FONT_STYLESHEETS = [
     {
+      id: 'aqm-fonts-vazirmatn-cdn',
+      href: 'https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css'
+    },
+    {
       id: 'aqm-fonts-google',
       href: 'https://fonts.googleapis.com/css2?family=Estedad:wght@300;400;500;600;700;800&family=Fredoka:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&family=Lalezar&family=Noto+Sans+Arabic:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Quicksand:wght@500;600;700&family=Space+Grotesk:wght@500;600;700&family=Vazirmatn:wght@300;400;500;600;700;800&display=swap'
     },
@@ -54,11 +58,98 @@
     }
   });
 
+  // ==========================================
+  // Persistent Settings Engine (CDP IPC + Local File + LocalStorage)
+  // ==========================================
+  if (!window.__antigravity_settings) {
+    window.__antigravity_settings = {};
+  }
+
+  function getPersistedSetting(key, defaultValue = null) {
+    try {
+      if (window.__antigravity_settings && window.__antigravity_settings[key] !== undefined && window.__antigravity_settings[key] !== null) {
+        return window.__antigravity_settings[key];
+      }
+      const val = localStorage.getItem(key);
+      if (val !== null && val !== undefined) {
+        return val;
+      }
+    } catch (e) {}
+    return defaultValue;
+  }
+
+  function persistSetting(key, value) {
+    try {
+      if (value === null || value === undefined) {
+        localStorage.removeItem(key);
+      } else {
+        localStorage.setItem(key, (typeof value === 'object') ? JSON.stringify(value) : String(value));
+      }
+    } catch (e) {}
+
+    if (!window.__antigravity_settings) window.__antigravity_settings = {};
+    window.__antigravity_settings[key] = value;
+
+    // 1. Send via Native CDP IPC (zero-latency)
+    if (typeof window.__aqm_daemon_ipc === 'function') {
+      try {
+        window.__aqm_daemon_ipc(JSON.stringify({
+          action: 'save_setting',
+          key: key,
+          value: value
+        }));
+      } catch (e) {}
+    }
+
+    // 2. Send via Local HTTP Daemon API (failsafe persistence to ~/.gemini/antigravity/user_settings.json)
+    try {
+      fetch('http://127.0.0.1:39281/api/save_setting', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key, value: value })
+      }).catch(() => {});
+    } catch (e) {}
+  }
+
+  // Preload settings from daemon in background as extra safety net
+  try {
+    fetch('http://127.0.0.1:39281/api/settings')
+      .then(res => res.json())
+      .then(savedSettings => {
+        if (savedSettings && typeof savedSettings === 'object') {
+          let hasDiff = false;
+          for (const [k, v] of Object.entries(savedSettings)) {
+            if (v !== undefined && v !== null) {
+              if (window.__antigravity_settings[k] !== v) {
+                window.__antigravity_settings[k] = v;
+                hasDiff = true;
+              }
+              try {
+                localStorage.setItem(k, (typeof v === 'object') ? JSON.stringify(v) : String(v));
+              } catch (e) {}
+            }
+          }
+          if (hasDiff && typeof initSettingsFromStore === 'function') {
+            initSettingsFromStore();
+            if (typeof getActiveTheme === 'function' && typeof applyAppWorkspaceTheme === 'function') {
+              applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
+            }
+            if (typeof applyRtlStyles === 'function') applyRtlStyles();
+            if (typeof renderBadge === 'function') renderBadge();
+            if (typeof renderPopover === 'function') renderPopover();
+          }
+        }
+      })
+      .catch(() => {});
+  } catch (e) {}
+
   // Custom user-imported fonts registry
   let customImportedFonts = [];
   try {
-    const savedImported = localStorage.getItem('antigravity:custom_imported_fonts');
-    if (savedImported) customImportedFonts = JSON.parse(savedImported) || [];
+    const savedImported = getPersistedSetting('antigravity:custom_imported_fonts');
+    if (savedImported) {
+      customImportedFonts = (typeof savedImported === 'string') ? JSON.parse(savedImported) : savedImported;
+    }
   } catch (e) {}
 
   function injectImportedFontStyles() {
@@ -88,10 +179,13 @@
   ['Fredoka', 'Outfit', 'Space Grotesk', 'JetBrains Mono', 'Inter', 'Plus Jakarta Sans', 'Estedad', 'Vazirmatn', 'Sahel', 'Shabnam', 'Samim', 'Lalezar', 'Noto Sans Arabic'].forEach(ensureFontLoaded);
 
   // 2. Global Keyframes & Precision Styles
-  if (!document.getElementById('aqm-styles')) {
-    const style = document.createElement('style');
+  let style = document.getElementById('aqm-styles');
+  if (!style) {
+    style = document.createElement('style');
     style.id = 'aqm-styles';
-    style.textContent = `
+    document.head.appendChild(style);
+  }
+  style.textContent = `
       @keyframes aqm-pulse-dot {
         0%, 100% { transform: scale(1); opacity: 1; filter: drop-shadow(0 0 5px currentColor); }
         50% { transform: scale(0.75); opacity: 0.5; filter: drop-shadow(0 0 1px currentColor); }
@@ -260,10 +354,164 @@
       .aqm-sw-toast.show {
         transform: translateX(-50%) translateY(0);
         opacity: 1;
+        pointer-events: auto;
+      }
+      .aqm-sw-toast a {
+        pointer-events: auto;
+        cursor: pointer;
       }
     `;
-    document.head.appendChild(style);
+
+  let swStyleTag = document.getElementById('aqm-switcher-styles');
+  if (!swStyleTag) {
+    swStyleTag = document.createElement('style');
+    swStyleTag.id = 'aqm-switcher-styles';
+    document.head.appendChild(swStyleTag);
   }
+  swStyleTag.textContent = `
+    .aqm-switcher-modal {
+      position: fixed !important;
+      inset: 0 !important;
+      background: rgba(0, 0, 0, 0.68) !important;
+      backdrop-filter: blur(18px) !important;
+      -webkit-backdrop-filter: blur(18px) !important;
+      z-index: 2147483647 !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+      visibility: hidden !important;
+      transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.2s !important;
+    }
+    .aqm-switcher-modal.aqm-active {
+      opacity: 1 !important;
+      pointer-events: auto !important;
+      visibility: visible !important;
+    }
+    .aqm-switcher-sheet {
+      width: 560px !important;
+      max-width: 92vw !important;
+      height: 520px !important;
+      max-height: 86vh !important;
+      border-radius: 18px !important;
+      background: rgba(13, 17, 24, 0.94) !important;
+      backdrop-filter: blur(30px) saturate(180%) !important;
+      -webkit-backdrop-filter: blur(30px) saturate(180%) !important;
+      border: 1px solid rgba(255, 255, 255, 0.08) !important;
+      box-shadow: 0 20px 60px -10px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+      display: flex !important;
+      flex-direction: column !important;
+      overflow: hidden !important;
+      transform: scale(0.97) translateY(6px) !important;
+      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
+      user-select: none !important;
+      font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+      letter-spacing: normal !important;
+      line-height: 1.65 !important;
+      -webkit-font-smoothing: antialiased !important;
+    }
+    .aqm-switcher-modal.aqm-active .aqm-switcher-sheet {
+      transform: scale(1) translateY(0) !important;
+    }
+    .aqm-sw-tab-btn {
+      padding: 5px 14px !important;
+      border-radius: 9999px !important;
+      font-size: 11.5px !important;
+      font-weight: 600 !important;
+      cursor: pointer !important;
+      transition: all 0.15s ease !important;
+      border: 1px solid transparent !important;
+      background: transparent !important;
+      color: #94a3b8 !important;
+      display: flex !important;
+      align-items: center !important;
+      gap: 6px !important;
+      letter-spacing: normal !important;
+    }
+    .aqm-sw-tab-btn:hover {
+      color: #f8fafc !important;
+    }
+    .aqm-sw-tab-btn.active {
+      background: rgba(255, 255, 255, 0.08) !important;
+      border-color: rgba(255, 255, 255, 0.12) !important;
+      color: #ffffff !important;
+      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.2) !important;
+    }
+    .aqm-sw-card {
+      background: rgba(255, 255, 255, 0.02) !important;
+      border: 1px solid rgba(255, 255, 255, 0.06) !important;
+      border-radius: 14px !important;
+      padding: 13px 15px !important;
+      transition: all 0.15s ease !important;
+      letter-spacing: normal !important;
+    }
+    .aqm-sw-card:hover {
+      background: rgba(255, 255, 255, 0.035) !important;
+      border-color: rgba(255, 255, 255, 0.09) !important;
+    }
+    .aqm-sw-btn {
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 5px !important;
+      padding: 4px 11px !important;
+      border-radius: 9999px !important;
+      font-size: 11px !important;
+      font-weight: 600 !important;
+      cursor: pointer !important;
+      transition: all 0.15s ease !important;
+      border: 1px solid rgba(255, 255, 255, 0.1) !important;
+      background: rgba(255, 255, 255, 0.04) !important;
+      color: #f1f5f9 !important;
+      letter-spacing: normal !important;
+    }
+    .aqm-sw-btn:hover {
+      background: rgba(255, 255, 255, 0.08) !important;
+      border-color: rgba(255, 255, 255, 0.18) !important;
+    }
+    .aqm-sw-btn:active {
+      transform: scale(0.97) !important;
+    }
+    .aqm-sw-btn-primary {
+      background: #3b82f6 !important;
+      border-color: #60a5fa !important;
+      color: #ffffff !important;
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.25) !important;
+    }
+    .aqm-sw-btn-primary:hover {
+      background: #2563eb !important;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important;
+    }
+    .aqm-sw-toast {
+      position: absolute !important;
+      top: 14px !important;
+      left: 50% !important;
+      transform: translateX(-50%) translateY(-14px) !important;
+      opacity: 0 !important;
+      padding: 6px 14px !important;
+      border-radius: 9999px !important;
+      font-size: 11px !important;
+      font-weight: 600 !important;
+      z-index: 10000005 !important;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+      pointer-events: none !important;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4) !important;
+      background: rgba(15, 23, 42, 0.95) !important;
+      border: 1px solid rgba(255, 255, 255, 0.14) !important;
+      color: #ffffff !important;
+      letter-spacing: normal !important;
+    }
+    .aqm-sw-toast.show {
+      transform: translateX(-50%) translateY(0) !important;
+      opacity: 1 !important;
+      pointer-events: auto !important;
+    }
+    .aqm-sw-toast a {
+      pointer-events: auto !important;
+      cursor: pointer !important;
+    }
+  `;
 
   // 3. Bespoke Themes with Unique Font Pairings, Textures & Deep Aesthetics
   const THEMES = {
@@ -504,28 +752,63 @@
   };
 
   let currentThemeId = 'cyber';
-  try {
-    const savedTheme = localStorage.getItem('antigravity:quota_theme');
-    if (savedTheme && THEMES[savedTheme]) currentThemeId = savedTheme;
-  } catch (e) {}
-
   let isFullAppThemingEnabled = true;
-  try {
-    const savedAppTheming = localStorage.getItem('antigravity:full_app_theming');
-    if (savedAppTheming !== null) isFullAppThemingEnabled = (savedAppTheming === 'true');
-  } catch (e) {}
-
   let customFontEn = 'default';
-  try {
-    const savedEn = localStorage.getItem('antigravity:custom_font_en');
-    if (savedEn) customFontEn = savedEn;
-  } catch (e) {}
-
   let customFontFa = 'default';
-  try {
-    const savedFa = localStorage.getItem('antigravity:custom_font_fa');
-    if (savedFa) customFontFa = savedFa;
-  } catch (e) {}
+
+  function initSettingsFromStore() {
+    try {
+      const savedTheme = getPersistedSetting('antigravity:quota_theme');
+      if (savedTheme && THEMES[savedTheme]) currentThemeId = savedTheme;
+    } catch (e) {}
+
+    try {
+      const savedAppTheming = getPersistedSetting('antigravity:full_app_theming');
+      if (savedAppTheming !== null && savedAppTheming !== undefined) {
+        isFullAppThemingEnabled = (savedAppTheming === true || savedAppTheming === 'true');
+      }
+    } catch (e) {}
+
+    try {
+      const savedEn = getPersistedSetting('antigravity:custom_font_en');
+      if (savedEn) customFontEn = savedEn;
+    } catch (e) {}
+
+    try {
+      const savedFa = getPersistedSetting('antigravity:custom_font_fa');
+      if (savedFa) customFontFa = savedFa;
+    } catch (e) {}
+
+    try {
+      const savedImported = getPersistedSetting('antigravity:custom_imported_fonts');
+      if (savedImported) {
+        customImportedFonts = (typeof savedImported === 'string') ? JSON.parse(savedImported) : savedImported;
+        injectImportedFontStyles();
+      }
+    } catch (e) {}
+
+    try {
+      const savedRtl = getPersistedSetting('antigravity:rtl_config');
+      if (savedRtl && typeof rtlConfig !== 'undefined') {
+        const parsed = (typeof savedRtl === 'string') ? JSON.parse(savedRtl) : savedRtl;
+        rtlConfig = { ...rtlConfig, ...parsed };
+      }
+    } catch (e) {}
+
+    try {
+      const savedMode = getPersistedSetting('antigravity:quota_mode');
+      if (savedMode === 'remaining' || savedMode === 'used') displayMode = savedMode;
+    } catch (e) {}
+
+    try {
+      const savedPrivacy = getPersistedSetting('antigravity:privacy_mode');
+      if (savedPrivacy !== null && savedPrivacy !== undefined) {
+        isPrivacyMode = (savedPrivacy === true || savedPrivacy !== 'false');
+      }
+    } catch (e) {}
+  }
+
+  initSettingsFromStore();
 
   let isImportFormOpen = false;
 
@@ -548,7 +831,7 @@
 
   function getActiveTheme() {
     try {
-      const savedTheme = localStorage.getItem('antigravity:quota_theme');
+      const savedTheme = getPersistedSetting('antigravity:quota_theme');
       if (savedTheme && THEMES[savedTheme]) currentThemeId = savedTheme;
     } catch (e) {}
     return THEMES[currentThemeId] || THEMES.cyber;
@@ -695,13 +978,16 @@
     fontSize: '16'
   };
   try {
-    const savedRtl = localStorage.getItem('antigravity:rtl_config');
-    if (savedRtl) rtlConfig = { ...rtlConfig, ...JSON.parse(savedRtl) };
+    const savedRtl = getPersistedSetting('antigravity:rtl_config');
+    if (savedRtl) {
+      const parsed = (typeof savedRtl === 'string') ? JSON.parse(savedRtl) : savedRtl;
+      rtlConfig = { ...rtlConfig, ...parsed };
+    }
   } catch (e) {}
 
   function saveRtlConfig() {
     try {
-      localStorage.setItem('antigravity:rtl_config', JSON.stringify(rtlConfig));
+      persistSetting('antigravity:rtl_config', rtlConfig);
     } catch (e) {}
   }
 
@@ -875,13 +1161,16 @@
 
   let displayMode = 'remaining';
   try {
-    const saved = localStorage.getItem('antigravity:quota_mode');
+    const saved = getPersistedSetting('antigravity:quota_mode');
     if (saved === 'remaining' || saved === 'used') displayMode = saved;
   } catch (e) {}
 
   let isPrivacyMode = true;
   try {
-    isPrivacyMode = localStorage.getItem('antigravity:privacy_mode') !== 'false';
+    const savedPrivacy = getPersistedSetting('antigravity:privacy_mode');
+    if (savedPrivacy !== null && savedPrivacy !== undefined) {
+      isPrivacyMode = (savedPrivacy === true || savedPrivacy !== 'false');
+    }
   } catch (e) {}
 
   let isDragging = false;
@@ -913,8 +1202,41 @@
   function getActiveModelName() {
     const trigger = document.querySelector('[data-testid="model-selector-trigger"]');
     if (!trigger) return 'Gemini 3.8 Flash High';
-    const firstLine = trigger.innerText.split('\n')[0].trim();
-    return firstLine || 'Gemini 3.8 Flash High';
+    const firstSpan = trigger.querySelector('span');
+    const raw = firstSpan ? firstSpan.innerText : trigger.innerText.split('\n')[0];
+    return (raw || 'Gemini 3.8 Flash High').trim();
+  }
+
+  function getActiveModelPool(usage) {
+    if (!usage) return null;
+    const modelName = getActiveModelName().toLowerCase();
+    const pools = usage.pools || [];
+    if (pools.length === 0) return usage.session || null;
+
+    // 1. Check for specific model family match
+    if (modelName.includes('claude') || modelName.includes('sonnet') || modelName.includes('opus')) {
+      const match = pools.find(p => p.name && (p.name.toLowerCase().includes('claude') || p.name.toLowerCase().includes('sonnet')));
+      if (match) return match;
+    }
+    if (modelName.includes('gpt') || modelName.includes('oss')) {
+      const match = pools.find(p => p.name && (p.name.toLowerCase().includes('gpt') || p.name.toLowerCase().includes('oss')));
+      if (match) return match;
+    }
+    if (modelName.includes('pro')) {
+      const match = pools.find(p => p.name && p.name.toLowerCase().includes('pro'));
+      if (match) return match;
+    }
+    if (modelName.includes('flash')) {
+      // Check if low/lite or high
+      const match = pools.find(p => p.name && p.name.toLowerCase().includes('flash'));
+      if (match) return match;
+    }
+
+    // 2. Direct name includes match
+    const directMatch = pools.find(p => p.name && (modelName.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(modelName)));
+    if (directMatch) return directMatch;
+
+    return usage.session || pools[0];
   }
 
   async function fetchStoredQuota() {
@@ -1190,7 +1512,8 @@
 
     let customPos = null;
     try {
-      customPos = JSON.parse(localStorage.getItem('antigravity:popover_pos') || 'null');
+      const p = getPersistedSetting('antigravity:popover_pos');
+      customPos = (typeof p === 'string') ? JSON.parse(p) : p;
     } catch (e) {}
 
     const anchor = document.getElementById('antigravity-usage-pill') || trigger;
@@ -1229,8 +1552,8 @@
     pop.style.overflow = 'visible';
 
     try {
-      const p = localStorage.getItem('antigravity:privacy_mode');
-      if (p !== null) isPrivacyMode = (p !== 'false');
+      const p = getPersistedSetting('antigravity:privacy_mode');
+      if (p !== null && p !== undefined) isPrivacyMode = (p === true || p !== 'false');
     } catch (e) {}
 
     const isRem = (displayMode === 'remaining');
@@ -1267,52 +1590,56 @@
     const claudeWeekUsed = claudeGptPool ? Math.round(claudeGptPool.weekly_pct) : 3;
     const claudeResets = claudeGptPool?.resets_in || '5h';
 
-    // ACCURATE MODEL NAMES DETECTED IN ANTIGRAVITY
-    // Gemini 3.8 Flash, Gemini 3.1 Pro, Claude Sonnet 4.6, GPT-OSS 120B
+    // ACCURATE MODEL NAMES & LIVE QUOTA POOLS
+    const flashPool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('flash'));
+    const proPool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('pro'));
+    const claudePool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('claude') || p.name?.toLowerCase().includes('sonnet'));
+    const gptPool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('gpt') || p.name?.toLowerCase().includes('oss'));
+
     const pools = [
       {
         id: 'gemini-flash',
         name: 'Gemini 3.8 Flash',
         svg: SVGS.gemini,
         isActive: activeModel.toLowerCase().includes('flash'),
-        used_pct: geminiSessUsed,
-        remaining_pct: geminiSessRem,
-        weekly_rem: geminiWeekRem,
-        weekly_pct: geminiWeekUsed,
-        resets_in: geminiResets
+        used_pct: flashPool ? Math.round(flashPool.used_pct) : geminiSessUsed,
+        remaining_pct: flashPool ? Math.round(flashPool.remaining_pct) : geminiSessRem,
+        weekly_rem: flashPool?.weekly_rem !== undefined ? Math.round(flashPool.weekly_rem) : geminiWeekRem,
+        weekly_pct: flashPool?.weekly_pct !== undefined ? Math.round(flashPool.weekly_pct) : geminiWeekUsed,
+        resets_in: flashPool?.resets_in || geminiResets
       },
       {
         id: 'gemini-pro',
         name: 'Gemini 3.1 Pro',
         svg: SVGS.gemini,
         isActive: activeModel.toLowerCase().includes('3.1') || (activeModel.toLowerCase().includes('pro') && !activeModel.toLowerCase().includes('flash')),
-        used_pct: geminiSessUsed,
-        remaining_pct: geminiSessRem,
-        weekly_rem: geminiWeekRem,
-        weekly_pct: geminiWeekUsed,
-        resets_in: geminiResets
+        used_pct: proPool ? Math.round(proPool.used_pct) : geminiSessUsed,
+        remaining_pct: proPool ? Math.round(proPool.remaining_pct) : geminiSessRem,
+        weekly_rem: proPool?.weekly_rem !== undefined ? Math.round(proPool.weekly_rem) : geminiWeekRem,
+        weekly_pct: proPool?.weekly_pct !== undefined ? Math.round(proPool.weekly_pct) : geminiWeekUsed,
+        resets_in: proPool?.resets_in || geminiResets
       },
       {
         id: 'claude',
         name: 'Claude Sonnet 4.6',
         svg: SVGS.claude,
-        isActive: activeModel.toLowerCase().includes('claude'),
-        used_pct: claudeSessUsed,
-        remaining_pct: claudeSessRem,
-        weekly_rem: claudeWeekRem,
-        weekly_pct: claudeWeekUsed,
-        resets_in: claudeResets
+        isActive: activeModel.toLowerCase().includes('claude') || activeModel.toLowerCase().includes('sonnet'),
+        used_pct: claudePool ? Math.round(claudePool.used_pct) : claudeSessUsed,
+        remaining_pct: claudePool ? Math.round(claudePool.remaining_pct) : claudeSessRem,
+        weekly_rem: claudePool?.weekly_rem !== undefined ? Math.round(claudePool.weekly_rem) : claudeWeekRem,
+        weekly_pct: claudePool?.weekly_pct !== undefined ? Math.round(claudePool.weekly_pct) : claudeWeekUsed,
+        resets_in: claudePool?.resets_in || claudeResets
       },
       {
         id: 'gpt-oss',
         name: 'GPT-OSS 120B',
         svg: SVGS.gpt,
         isActive: activeModel.toLowerCase().includes('gpt') || activeModel.toLowerCase().includes('oss'),
-        used_pct: claudeSessUsed,
-        remaining_pct: claudeSessRem,
-        weekly_rem: claudeWeekRem,
-        weekly_pct: claudeWeekUsed,
-        resets_in: claudeResets
+        used_pct: gptPool ? Math.round(gptPool.used_pct) : claudeSessUsed,
+        remaining_pct: gptPool ? Math.round(gptPool.remaining_pct) : claudeSessRem,
+        weekly_rem: gptPool?.weekly_rem !== undefined ? Math.round(gptPool.weekly_rem) : claudeWeekRem,
+        weekly_pct: gptPool?.weekly_pct !== undefined ? Math.round(gptPool.weekly_pct) : claudeWeekUsed,
+        resets_in: gptPool?.resets_in || claudeResets
       },
       {
         id: 'others',
@@ -1455,7 +1782,7 @@
           </button>
 
           <!-- Account Switcher Trigger -->
-          <button id="aqm-account-switcher-trigger" type="button" data-font="fa" title="سوئیچ اکانت و مهاجرت پروژه‌ها (iOS Liquid Glass)" style="display:flex;align-items:center;gap:4px;height:24px;padding:0 8px;border-radius:9999px;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.textColor};font-size:10.5px;font-weight:600;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};user-select:none;">
+          <button id="aqm-account-switcher-trigger" type="button" data-font="fa" title="سوئیچ اکانت و مهاجرت پروژه‌ها" style="display:flex;align-items:center;gap:4px;height:24px;padding:0 8px;border-radius:9999px;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.textColor};font-size:10.5px;font-weight:600;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};user-select:none;">
             <span style="color:${theme.accent};">⚡️</span>
             <span style="font-size:10px;opacity:0.95;">سوئیچ</span>
           </button>
@@ -1781,9 +2108,7 @@
       privacyBtn.onclick = (e) => {
         e.stopPropagation();
         isPrivacyMode = !isPrivacyMode;
-        try {
-          localStorage.setItem('antigravity:privacy_mode', String(isPrivacyMode));
-        } catch (err) {}
+        persistSetting('antigravity:privacy_mode', isPrivacyMode);
         renderPopover();
       };
     }
@@ -1791,7 +2116,7 @@
     pop.querySelector('#aqm-mode-rem-btn').onclick = (e) => {
       e.stopPropagation();
       displayMode = 'remaining';
-      try { localStorage.setItem('antigravity:quota_mode', 'remaining'); } catch (err) {}
+      persistSetting('antigravity:quota_mode', 'remaining');
       renderBadge();
       renderPopover();
     };
@@ -1799,7 +2124,7 @@
     pop.querySelector('#aqm-mode-used-btn').onclick = (e) => {
       e.stopPropagation();
       displayMode = 'used';
-      try { localStorage.setItem('antigravity:quota_mode', 'used'); } catch (err) {}
+      persistSetting('antigravity:quota_mode', 'used');
       renderBadge();
       renderPopover();
     };
@@ -1833,7 +2158,7 @@
         const tid = item.getAttribute('data-theme-id');
         if (THEMES[tid]) {
           currentThemeId = tid;
-          try { localStorage.setItem('antigravity:quota_theme', tid); } catch (err) {}
+          persistSetting('antigravity:quota_theme', tid);
           applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
           renderBadge();
           renderPopover();
@@ -1846,7 +2171,7 @@
         e.stopPropagation();
         const fn = btn.getAttribute('data-font-en');
         customFontEn = fn;
-        try { localStorage.setItem('antigravity:custom_font_en', fn); } catch (err) {}
+        persistSetting('antigravity:custom_font_en', fn);
         ensureFontLoaded(fn);
         applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
         renderBadge();
@@ -1859,7 +2184,7 @@
         e.stopPropagation();
         const fn = btn.getAttribute('data-font-fa');
         customFontFa = fn;
-        try { localStorage.setItem('antigravity:custom_font_fa', fn); } catch (err) {}
+        persistSetting('antigravity:custom_font_fa', fn);
         ensureFontLoaded(fn);
         applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
         renderBadge();
@@ -1910,9 +2235,7 @@
             url: rawUrl,
             type: fType
           });
-          try {
-            localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(customImportedFonts));
-          } catch(err) {}
+          persistSetting('antigravity:custom_imported_fonts', customImportedFonts);
         }
 
         if (rawUrl) {
@@ -1921,10 +2244,10 @@
 
         if (fType === 'fa') {
           customFontFa = rawName;
-          try { localStorage.setItem('antigravity:custom_font_fa', rawName); } catch(err){}
+          persistSetting('antigravity:custom_font_fa', rawName);
         } else {
           customFontEn = rawName;
-          try { localStorage.setItem('antigravity:custom_font_en', rawName); } catch(err){}
+          persistSetting('antigravity:custom_font_en', rawName);
         }
 
         ensureFontLoaded(rawName);
@@ -1940,17 +2263,15 @@
         e.stopPropagation();
         const fid = delBtn.getAttribute('data-delete-imported-font');
         customImportedFonts = customImportedFonts.filter(f => f.id !== fid);
-        try {
-          localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(customImportedFonts));
-        } catch(err) {}
+        persistSetting('antigravity:custom_imported_fonts', customImportedFonts);
 
         if (customFontFa === fid) {
           customFontFa = 'default';
-          try { localStorage.setItem('antigravity:custom_font_fa', 'default'); } catch(err){}
+          persistSetting('antigravity:custom_font_fa', 'default');
         }
         if (customFontEn === fid) {
           customFontEn = 'default';
-          try { localStorage.setItem('antigravity:custom_font_en', 'default'); } catch(err){}
+          persistSetting('antigravity:custom_font_en', 'default');
         }
 
         applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
@@ -1963,7 +2284,7 @@
     fullAppToggleRow.onclick = (e) => {
       e.stopPropagation();
       isFullAppThemingEnabled = !isFullAppThemingEnabled;
-      try { localStorage.setItem('antigravity:full_app_theming', String(isFullAppThemingEnabled)); } catch (err) {}
+      persistSetting('antigravity:full_app_theming', isFullAppThemingEnabled);
       applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
       renderBadge();
       renderPopover();
@@ -2069,12 +2390,10 @@
           dragHandle.style.cursor = 'grab';
 
           if (hasMoved) {
-            try {
-              localStorage.setItem('antigravity:popover_pos', JSON.stringify({
-                left: pop.style.left,
-                top: pop.style.top
-              }));
-            } catch (err) {}
+            persistSetting('antigravity:popover_pos', {
+              left: pop.style.left,
+              top: pop.style.top
+            });
           }
         }
 
@@ -2085,9 +2404,7 @@
       dragHandle.ondblclick = (e) => {
         if (e.target.closest('button') || e.target.closest('input')) return;
         e.stopPropagation();
-        try {
-          localStorage.removeItem('antigravity:popover_pos');
-        } catch (err) {}
+        persistSetting('antigravity:popover_pos', null);
         const anchor = document.getElementById('antigravity-usage-pill') || trigger;
         const rect = anchor.getBoundingClientRect();
         pop.style.left = Math.max(16, rect.left - 20) + 'px';
@@ -2123,13 +2440,13 @@
   // ==========================================
   const SW_I18N = {
     fa: {
-      appName: "آنتی‌گرویتی سوئیچر",
-      appSubtitle: "سوئیت فوق‌لوکس مدیریت اکانت و مهاجرت پروژه‌ها",
-      tabAccounts: "👤 اکانت‌ها و سهمیه",
-      tabMigration: "⇄ مرکز مهاجرت چت‌ها",
-      activeAccount: "اکانت فعال جاری",
-      saveCurrent: "💾 ذخیره اکانت فعلی",
-      savedAccounts: "اکانت‌های ذخیره‌شده",
+      appName: "مدیریت حساب‌ها",
+      appSubtitle: "مدیریت حساب‌ها و مهاجرت گفتگوها",
+      tabAccounts: "حساب‌ها",
+      tabMigration: "مهاجرت گفتگوها",
+      activeAccount: "حساب فعال",
+      saveCurrent: "ذخیره این اکانت",
+      savedAccounts: "حساب‌های ذخیره‌شده",
       noSavedAccounts: "هنوز اکانت دیگری ذخیره نشده است. با دکمه بالا، اکانت فعلی خود را ذخیره کنید تا همیشه در دسترس باشد!",
       switchNow: "⚡️ سوئیچ به این اکانت",
       deleteAccount: "حذف",
@@ -2275,7 +2592,17 @@
     isLoaded: false,
     isLoading: false
   };
-  let swLang = localStorage.getItem('antigravity:switcher_lang') || 'fa';
+
+  // Immediate synchronous restore from localStorage
+  try {
+    const cachedMan = localStorage.getItem('antigravity:accounts_manifest');
+    if (cachedMan) {
+      swState.savedAccounts = JSON.parse(cachedMan) || {};
+      swState.isLoaded = true;
+    }
+  } catch(e) {}
+
+  let swLang = getPersistedSetting('antigravity:switcher_lang', 'fa') || 'fa';
   let swTab = 'accounts';
   let swSelectedConvs = new Set();
   let swMode = 'copy';
@@ -2284,30 +2611,88 @@
   let swSearch = '';
   let swTargetAccount = '';
   let swIsMigrating = false;
+  let swShowAddPanel = false;
+  let swShowTokenInput = false;
+  let swOAuthUrl = null;
   let swToastTimeout = null;
 
+  function getCleanUserDisplayName(rawCandidate, rawEmail) {
+    let email = rawEmail || (swState.activeAccount && swState.activeAccount.email) || (window.__antigravity_quota && window.__antigravity_quota.email) || '';
+    if (!email && rawCandidate && rawCandidate.includes('@')) {
+      email = rawCandidate;
+    }
+    if (email && email.includes('@')) {
+      let part = email.split('@')[0];
+      if (part.includes('.')) part = part.split('.')[0];
+      if (part.includes('+')) part = part.split('+')[0];
+      part = part.trim();
+      if (part.length > 0) {
+        return part.charAt(0).toUpperCase() + part.slice(1);
+      }
+    }
+    if (rawCandidate && typeof rawCandidate === 'string' && rawCandidate.trim()) {
+      const c = rawCandidate.trim().split(' ')[0];
+      if (!c.toLowerCase().includes('user') && !c.toLowerCase().includes('ethan')) {
+        return c.charAt(0).toUpperCase() + c.slice(1);
+      }
+    }
+    return 'Madgod';
+  }
+
+  function callDaemonIpc(action, payload = {}) {
+    let handled = false;
+    if (typeof window.__aqm_daemon_ipc === 'function') {
+      try {
+        window.__aqm_daemon_ipc(JSON.stringify({ action, ...payload }));
+        handled = true;
+      } catch(e) {}
+    }
+    try {
+      localStorage.setItem('antigravity:switcher_command', JSON.stringify({ action, ...payload, _ts: Date.now() }));
+      handled = true;
+    } catch(e) {}
+    return handled;
+  }
+
+  window.__onSwitcherStateUpdate = function(data) {
+    if (!data) return;
+    if (data.activeAccount) {
+      swState.activeAccount = data.activeAccount;
+      window.__antigravity_quota = data.activeAccount;
+      try {
+        localStorage.setItem('antigravity:active_quota', JSON.stringify(data.activeAccount));
+      } catch(e) {}
+    }
+    if (data.savedAccounts) swState.savedAccounts = data.savedAccounts;
+    if (data.conversations) swState.conversations = data.conversations;
+    swState.isLoaded = true;
+    swState.isLoading = false;
+    try {
+      localStorage.setItem('antigravity:accounts_manifest', JSON.stringify(swState.savedAccounts));
+    } catch(e) {}
+    if (typeof renderBadge === 'function') renderBadge();
+    const modal = document.getElementById('antigravity-switcher-modal');
+    if (modal && modal.classList.contains('aqm-active')) {
+      renderSwitcherModal();
+    }
+  };
+
+  window.__showSwitcherToast = showSwitcherToast;
+
   function fetchSwitcherState(cb) {
+    if (callDaemonIpc('getState')) {
+      if (cb) setTimeout(cb, 120);
+      return;
+    }
     if (swState.isLoading) return;
     swState.isLoading = true;
     fetch('http://127.0.0.1:39281/api/state')
       .then(r => r.json())
       .then(data => {
-        swState.activeAccount = data.activeAccount || null;
-        swState.savedAccounts = data.savedAccounts || {};
-        swState.conversations = data.conversations || [];
-        swState.isLoaded = true;
-        swState.isLoading = false;
-        if (!swTargetAccount && Object.keys(swState.savedAccounts).length > 0) {
-          swTargetAccount = Object.keys(swState.savedAccounts)[0];
-        }
-        if (typeof renderBadge === 'function') renderBadge();
-        const modal = document.getElementById('antigravity-switcher-modal');
-        if (modal && modal.classList.contains('aqm-active')) {
-          renderSwitcherModal();
-        }
+        window.__onSwitcherStateUpdate(data);
         if (cb) cb();
       })
-      .catch(err => {
+      .catch(() => {
         swState.isLoading = false;
         if (cb) cb();
       });
@@ -2322,14 +2707,28 @@
       toast.className = 'aqm-sw-toast';
       modal.appendChild(toast);
     }
-    toast.textContent = msg;
+    if (typeof msg === 'string' && (msg.includes('<') && msg.includes('>'))) {
+      toast.innerHTML = msg;
+    } else {
+      toast.textContent = msg;
+    }
+    toast.style.pointerEvents = 'auto';
     toast.style.background = isError ? 'rgba(239, 68, 68, 0.95)' : 'rgba(16, 185, 129, 0.95)';
     toast.style.color = '#ffffff';
     toast.style.border = `1px solid ${isError ? 'rgba(239, 68, 68, 0.6)' : 'rgba(16, 185, 129, 0.6)'}`;
     toast.classList.add('show');
     if (swToastTimeout) clearTimeout(swToastTimeout);
-    swToastTimeout = setTimeout(() => { toast.classList.remove('show'); }, 3400);
+    const hasLink = typeof msg === 'string' && msg.includes('<a');
+    const delay = hasLink ? 35000 : 6000;
+    swToastTimeout = setTimeout(() => { toast.classList.remove('show'); }, delay);
   }
+
+  window.__onOAuthUrlReady = function(url) {
+    if (!url) return;
+    swOAuthUrl = url;
+    swShowAddPanel = true;
+    renderSwitcherModal();
+  };
 
   function openSwitcherModal() {
     let modal = document.getElementById('antigravity-switcher-modal');
@@ -2343,11 +2742,26 @@
         if (e.target === modal && !swIsMigrating) closeSwitcherModal();
       };
       window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && modal.classList.contains('aqm-active') && !swIsMigrating) {
+        if (e.key === 'Escape' && (modal.classList.contains('aqm-active') || modal.style.visibility === 'visible') && !swIsMigrating) {
           closeSwitcherModal();
         }
       });
     }
+
+    modal.style.position = 'fixed';
+    modal.style.inset = '0';
+    modal.style.zIndex = '2147483647';
+    modal.style.display = 'flex';
+    modal.style.alignItems = 'center';
+    modal.style.justifyContent = 'center';
+    modal.style.background = 'rgba(0, 0, 0, 0.72)';
+    modal.style.backdropFilter = 'blur(16px)';
+    modal.style.webkitBackdropFilter = 'blur(16px)';
+    modal.style.opacity = '1';
+    modal.style.pointerEvents = 'auto';
+    modal.style.visibility = 'visible';
+    modal.style.transition = 'opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.24s';
+
     modal.classList.add('aqm-active');
     renderSwitcherModal();
     fetchSwitcherState(() => {
@@ -2357,12 +2771,17 @@
 
   function closeSwitcherModal() {
     const modal = document.getElementById('antigravity-switcher-modal');
-    if (modal) modal.classList.remove('aqm-active');
+    if (modal) {
+      modal.classList.remove('aqm-active');
+      modal.style.opacity = '0';
+      modal.style.pointerEvents = 'none';
+      modal.style.visibility = 'hidden';
+    }
   }
 
   function toggleSwitcherModal() {
     const modal = document.getElementById('antigravity-switcher-modal');
-    if (modal && modal.classList.contains('aqm-active')) {
+    if (modal && (modal.classList.contains('aqm-active') || modal.style.visibility === 'visible')) {
       closeSwitcherModal();
     } else {
       openSwitcherModal();
@@ -2377,11 +2796,14 @@
     const t = SW_I18N[swLang] || SW_I18N.fa;
     const isFa = (swLang === 'fa');
     const dir = isFa ? 'rtl' : 'ltr';
-    const fontFamily = isFa ? "'Vazirmatn', -apple-system, BlinkMacSystemFont, sans-serif" : "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif";
+    const fontFamily = "'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 
     const activeAcc = swState.activeAccount || {};
-    const email = activeAcc.email || (window.__antigravity_quota && window.__antigravity_quota.email) || 'madgod.cum@gmail.com';
-    const name = activeAcc.name || (email ? email.split('@')[0] : 'Madgod');
+    const email = activeAcc.email || (window.__antigravity_quota && window.__antigravity_quota.email) || 'developer@antigravity.ai';
+    let cleanDisplayName = (typeof getCleanUserDisplayName === 'function') 
+      ? getCleanUserDisplayName(activeAcc.name, email) 
+      : ((email ? email.split('@')[0].split('.')[0] : 'User'));
+    cleanDisplayName = cleanDisplayName ? (cleanDisplayName.charAt(0).toUpperCase() + cleanDisplayName.slice(1)) : 'User';
     const avatar = activeAcc.avatar || '';
     const tier = activeAcc.tier || 'Google AI Pro';
     const tierCode = (activeAcc.tier_code || 'pro').toLowerCase();
@@ -2393,6 +2815,7 @@
 
     const savedKeys = Object.keys(swState.savedAccounts || {});
     const savedCount = savedKeys.length;
+    const isCurrentSaved = !!(email && swState.savedAccounts && swState.savedAccounts[email]);
 
     // Filter conversations for Migration tab
     const filteredConvs = (swState.conversations || []).filter(c => {
@@ -2402,181 +2825,200 @@
     });
 
     modal.innerHTML = `
-      <div class="aqm-switcher-sheet" style="background:${theme.isDark ? 'rgba(15, 23, 42, 0.95)' : 'rgba(255, 255, 255, 0.95)'};border:1px solid ${theme.cardBorder || 'rgba(255,255,255,0.18)'};backdrop-filter:blur(40px) saturate(190%);-webkit-backdrop-filter:blur(40px) saturate(190%);color:${theme.textColor || '#f8fafc'};font-family:${fontFamily};direction:${dir};">
+      <div class="aqm-switcher-sheet" style="font-family:${fontFamily};direction:${dir};color:#f8fafc;">
         
-        <!-- Header -->
-        <div style="padding:18px 24px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
-          <div style="display:flex;align-items:center;gap:12px;">
-            <div style="width:36px;height:36px;border-radius:12px;background:linear-gradient(135deg, #38bdf8, #6366f1);display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(99,102,241,0.4);color:#ffffff;">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
-              </svg>
-            </div>
-            <div>
-              <div style="font-size:15px;font-weight:800;letter-spacing:-0.02em;display:flex;align-items:center;gap:8px;">
-                <span>${t.appName}</span>
-                <span style="font-size:9.5px;padding:2px 7px;border-radius:9999px;background:rgba(99,102,241,0.2);color:#818cf8;border:1px solid rgba(99,102,241,0.3);font-weight:700;">v2.0 PRO</span>
-              </div>
-              <div style="font-size:11px;color:${theme.subText || '#94a3b8'};opacity:0.85;">${t.author}</div>
-            </div>
+        <!-- Header (Clean & Minimal) -->
+        <div style="padding:12px 18px;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.85;">
+              <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+            <span style="font-size:13.5px;font-weight:700;">${isFa ? 'مدیریت حساب‌ها' : 'Account Manager'}</span>
           </div>
 
-          <div style="display:flex;align-items:center;gap:10px;">
-            <!-- Language Pills -->
-            <div style="display:flex;padding:3px;border-radius:9999px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.1);">
-              <button class="aqm-lang-btn ${swLang === 'fa' ? 'active' : ''}" data-lang="fa" style="background:${swLang === 'fa' ? 'rgba(255,255,255,0.18)' : 'transparent'};border:none;color:${theme.textColor || '#fff'};padding:3px 9px;border-radius:9999px;font-size:11px;font-weight:700;cursor:pointer;">🇮🇷 فا</button>
-              <button class="aqm-lang-btn ${swLang === 'en' ? 'active' : ''}" data-lang="en" style="background:${swLang === 'en' ? 'rgba(255,255,255,0.18)' : 'transparent'};border:none;color:${theme.textColor || '#fff'};padding:3px 9px;border-radius:9999px;font-size:11px;font-weight:700;cursor:pointer;">🇺🇸 EN</button>
-              <button class="aqm-lang-btn ${swLang === 'zh' ? 'active' : ''}" data-lang="zh" style="background:${swLang === 'zh' ? 'rgba(255,255,255,0.18)' : 'transparent'};border:none;color:${theme.textColor || '#fff'};padding:3px 9px;border-radius:9999px;font-size:11px;font-weight:700;cursor:pointer;">🇨🇳 中</button>
-              <button class="aqm-lang-btn ${swLang === 'es' ? 'active' : ''}" data-lang="es" style="background:${swLang === 'es' ? 'rgba(255,255,255,0.18)' : 'transparent'};border:none;color:${theme.textColor || '#fff'};padding:3px 9px;border-radius:9999px;font-size:11px;font-weight:700;cursor:pointer;">🇪🇸 ES</button>
-            </div>
+          <!-- Minimal Segmented Tabs in Header -->
+          <div style="display:flex;gap:4px;background:rgba(0,0,0,0.25);padding:3px;border-radius:9999px;border:1px solid rgba(255,255,255,0.06);">
+            <button class="aqm-sw-tab-btn ${swTab === 'accounts' ? 'active' : ''}" id="aqm-tab-btn-accounts" style="padding:3px 12px;font-size:11px;">
+              <span>${isFa ? 'حساب‌ها' : 'Accounts'}</span>
+            </button>
+            <button class="aqm-sw-tab-btn ${swTab === 'migration' ? 'active' : ''}" id="aqm-tab-btn-migration" style="padding:3px 12px;font-size:11px;">
+              <span>${isFa ? 'انتقال گفتگوها' : 'Migration'}</span>
+              <span style="font-size:9.5px;opacity:0.6;font-family:'JetBrains Mono',monospace;">(${(swState.conversations || []).length})</span>
+            </button>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:8px;">
+            <!-- Language Switcher -->
+            <button id="aqm-lang-toggle-btn" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);color:#94a3b8;padding:2px 8px;border-radius:9999px;font-size:10.5px;font-weight:600;cursor:pointer;transition:all 0.15s;outline:none;">
+              ${swLang === 'fa' ? 'EN' : 'فا'}
+            </button>
 
             <!-- Close Button -->
-            <button id="aqm-sw-modal-close" style="width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);color:${theme.textColor || '#fff'};cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;transition:all 0.2s;">✕</button>
+            <button id="aqm-sw-modal-close" style="width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);color:#94a3b8;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px;transition:all 0.15s;">✕</button>
           </div>
-        </div>
-
-        <!-- Segmented Navigation Tabs -->
-        <div style="padding:10px 24px;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;gap:8px;background:rgba(0,0,0,0.12);flex-shrink:0;">
-          <button class="aqm-sw-tab-btn ${swTab === 'accounts' ? 'active' : ''}" id="aqm-tab-btn-accounts" style="color:${theme.textColor || '#fff'};">
-            <span>👤</span>
-            <span>${t.tabAccounts}</span>
-          </button>
-          <button class="aqm-sw-tab-btn ${swTab === 'migration' ? 'active' : ''}" id="aqm-tab-btn-migration" style="color:${theme.textColor || '#fff'};">
-            <span>⇄</span>
-            <span>${t.tabMigration}</span>
-            <span style="font-size:9.5px;padding:1px 6px;border-radius:9999px;background:rgba(59,130,246,0.25);color:#60a5fa;border:1px solid rgba(59,130,246,0.4);">${(swState.conversations || []).length}</span>
-          </button>
         </div>
 
         <!-- Content Body (Scrollable) -->
-        <div class="aqm-custom-scroll" style="flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:18px;">
+        <div class="aqm-custom-scroll" style="flex:1;overflow-y:auto;padding:14px 18px;display:flex;flex-direction:column;gap:12px;">
           
           ${swTab === 'accounts' ? `
-            <!-- ACTIVE ACCOUNT HERO CARD -->
-            <div class="aqm-sw-card" style="background:linear-gradient(135deg, rgba(30,41,59,0.7), rgba(15,23,42,0.85));border:1px solid rgba(255,255,255,0.14);box-shadow:0 10px 30px rgba(0,0,0,0.3);">
-              
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-                <div style="display:flex;align-items:center;gap:14px;">
-                  <div style="position:relative;">
-                    ${avatar ? `<img src="${avatar}" style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:2px solid #38bdf8;box-shadow:0 0 16px rgba(56,189,248,0.4);" />` : `
-                      <div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg, #6366f1, #3b82f6);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:#fff;border:2px solid #38bdf8;">${name[0] || 'A'}</div>
+            <!-- ACTIVE ACCOUNT CARD -->
+            <div class="aqm-sw-card" style="padding:14px 15px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="position:relative;flex-shrink:0;">
+                    ${avatar ? `<img src="${avatar}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,255,255,0.18);" />` : `
+                      <div style="width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#f8fafc;">${cleanDisplayName[0]}</div>
                     `}
-                    <div style="position:absolute;bottom:0;right:0;width:12px;height:12px;border-radius:50%;background:#10b981;border:2px solid #0f172a;box-shadow:0 0 8px #10b981;"></div>
+                    <div style="position:absolute;bottom:0;right:0;width:8px;height:8px;border-radius:50%;background:#10b981;border:1.5px solid #0d1118;"></div>
                   </div>
                   <div>
-                    <div style="display:flex;align-items:center;gap:8px;">
-                      <span style="font-size:16px;font-weight:800;letter-spacing:-0.02em;">${name}</span>
-                      <span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:9999px;background:rgba(251,191,36,0.2);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);text-transform:uppercase;">${tier}</span>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                      <span style="font-size:13.5px;font-weight:700;">${cleanDisplayName}</span>
+                      <span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:9999px;background:rgba(251,191,36,0.12);color:#fbbf24;border:1px solid rgba(251,191,36,0.25);text-transform:uppercase;">${tierCode.toUpperCase()}</span>
                     </div>
-                    <div style="font-size:12px;color:${theme.subText || '#94a3b8'};opacity:0.9;" dir="ltr">${email}</div>
+                    <div style="font-size:11px;color:#94a3b8;font-family:'JetBrains Mono',monospace;" dir="ltr">${email}</div>
                   </div>
                 </div>
 
-                <div style="display:flex;align-items:center;gap:8px;">
-                  <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-save-current-btn">
-                    <span>💾</span>
-                    <span>${t.saveCurrent}</span>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  ${isCurrentSaved ? `
+                    <span style="font-size:11px;color:#10b981;font-weight:600;display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:rgba(16,185,129,0.08);border-radius:9999px;border:1px solid rgba(16,185,129,0.2);">
+                      <span>●</span>
+                      <span>${isFa ? 'ذخیره در لیست' : 'Saved'}</span>
+                    </span>
+                  ` : `
+                    <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-save-current-btn" title="${isFa ? 'ذخیره این اکانت در لیست' : 'Save Account'}">
+                      <span>💾</span>
+                      <span>${isFa ? 'ذخیره اکانت' : 'Save'}</span>
+                    </button>
+                  `}
+                  <button class="aqm-sw-btn" id="aqm-sw-refresh-btn" title="${isFa ? 'بروزرسانی' : 'Refresh'}" style="padding:4px 8px;">
+                    <span class="${isRefreshing ? 'aqm-rotating' : ''}">🔄</span>
                   </button>
-                  <button class="aqm-sw-btn" id="aqm-sw-refresh-btn" title="${t.refresh}">
-                    <span>🔄</span>
-                  </button>
                 </div>
               </div>
 
-              <!-- Live Quota Gauge -->
-              <div style="background:rgba(0,0,0,0.3);border-radius:14px;padding:12px 16px;border:1px solid rgba(255,255,255,0.08);margin-bottom:14px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:12px;">
-                  <span style="font-weight:700;display:flex;align-items:center;gap:6px;">
-                    <span style="color:#fbbf24;">⚡️</span>
-                    <span>Gemini 3.8 Flash & Pro</span>
-                  </span>
-                  <span style="color:#94a3b8;font-size:11px;">${t.resetsIn} <b style="color:#f8fafc;" dir="ltr">${resetsIn}</b></span>
+              <!-- Minimal Quota Bar -->
+              <div style="background:rgba(0,0,0,0.18);border-radius:10px;padding:9px 12px;border:1px solid rgba(255,255,255,0.04);">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;font-size:11px;">
+                  <span style="color:#cbd5e1;font-weight:600;">${isFa ? 'سهمیه نشست جاری' : 'Session Quota'}</span>
+                  <span style="color:#94a3b8;font-size:10.5px;">${isFa ? 'تمدید در' : 'Resets in'} <b style="color:#f1f5f9;" dir="ltr">${resetsIn}</b></span>
                 </div>
-                <div style="height:7px;border-radius:9999px;background:rgba(255,255,255,0.08);overflow:hidden;margin-bottom:8px;">
-                  <div style="height:100%;width:${remPct}%;background:linear-gradient(90deg, #10b981, #38bdf8);border-radius:9999px;box-shadow:0 0 10px rgba(56,189,248,0.5);"></div>
+                <div style="height:4px;border-radius:9999px;background:rgba(255,255,255,0.06);overflow:hidden;margin-bottom:5px;">
+                  <div style="height:100%;width:${remPct}%;background:linear-gradient(90deg, #10b981, #38bdf8);border-radius:9999px;"></div>
                 </div>
-                <div style="display:flex;justify-content:space-between;font-size:11px;color:${theme.subText || '#94a3b8'};">
-                  <span>${remPct}% باقی‌مانده</span>
-                  <span>${usedPct}% مصرف‌شده</span>
+                <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;font-family:'JetBrains Mono',monospace;">
+                  <span>${remPct}% ${isFa ? 'باقی‌مانده' : 'remaining'}</span>
+                  <span>${usedPct}% ${isFa ? 'مصرف‌شده' : 'used'}</span>
                 </div>
               </div>
-
-              <!-- Models Pool Chips -->
-              <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:8px;">
-                ${((activeAcc.pools && activeAcc.pools.length > 0) ? activeAcc.pools : [
-                  { name: 'Gemini 3.8 Flash High', remaining_pct: remPct, resets_in: resetsIn },
-                  { name: 'Gemini 3.1 Pro', remaining_pct: remPct, resets_in: resetsIn },
-                  { name: 'Claude Sonnet 4.6', remaining_pct: 100, resets_in: '4 hr 59 min' },
-                  { name: 'GPT-OSS 120B', remaining_pct: 100, resets_in: '4 hr 59 min' }
-                ]).map(p => `
-                  <div style="padding:8px 12px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;gap:3px;">
-                    <span style="font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.name}</span>
-                    <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#94a3b8;">
-                      <span style="color:#10b981;font-weight:800;" dir="ltr">${p.remaining_pct}%</span>
-                      <span dir="ltr">${p.resets_in || ''}</span>
-                    </div>
-                  </div>
-                `).join('')}
-              </div>
-
             </div>
 
-            <!-- SAVED ACCOUNTS LIST -->
+            <!-- SAVED ACCOUNTS SECTION -->
             <div>
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-                <div style="display:flex;align-items:center;gap:8px;">
-                  <h3 style="margin:0;font-size:14px;font-weight:800;">${t.savedAccounts}</h3>
-                  <span style="font-size:10.5px;padding:2px 7px;border-radius:9999px;background:rgba(255,255,255,0.08);color:#94a3b8;font-weight:700;">${savedCount}</span>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding:0 2px;">
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <span style="font-size:12px;font-weight:700;color:#cbd5e1;">${isFa ? 'حساب‌های من' : 'Saved Accounts'}</span>
+                  <span style="font-size:10px;padding:0 6px;border-radius:9999px;background:rgba(255,255,255,0.06);color:#94a3b8;font-family:'JetBrains Mono',monospace;">${savedCount}</span>
                 </div>
-                <button class="aqm-sw-btn" id="aqm-sw-add-new-btn" style="padding:5px 12px;font-size:11.5px;">
-                  <span>➕</span>
-                  <span>${t.addNewAccount}</span>
+
+                <!-- Safe Add Account Button -->
+                <button class="aqm-sw-btn" id="aqm-sw-toggle-add-btn" style="font-size:11px;padding:3px 9px;">
+                  <span>${swShowAddPanel ? (isFa ? '✕ بستن' : '✕ Close') : (isFa ? '＋ افزودن حساب' : '＋ Add Account')}</span>
                 </button>
               </div>
 
+              <!-- SAFE ADD ACCOUNT DRAWER -->
+              ${swShowAddPanel ? `
+                <div class="aqm-sw-card" style="border:1px solid rgba(59,130,246,0.25);background:rgba(59,130,246,0.03);margin-bottom:10px;padding:12px 14px;">
+                  <div style="font-size:11.5px;font-weight:700;color:#93c5fd;margin-bottom:4px;">${isFa ? 'افزودن حساب جدید به آنتی‌گرویتی' : 'Add New Account'}</div>
+                  <div style="font-size:10.5px;color:#94a3b8;margin-bottom:10px;line-height:1.6;">
+                    ${isFa 
+                      ? `حساب فعال شما (<b>${cleanDisplayName}</b>) با امنیت کامل در سیستم ذخیره است و هیچ داده‌ای پاک نمی‌شود. یکی از روش‌ها را انتخاب کنید:`
+                      : `Your active account (<b>${cleanDisplayName}</b>) is safely saved. Choose an option:`}
+                  </div>
+
+                  <div style="display:flex;gap:8px;margin-bottom:8px;">
+                    <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-add-oauth-btn" style="flex:1;padding:6px 10px;font-size:11px;">
+                      <span>🔑</span>
+                      <span>${isFa ? 'ورود با جیمیل جدید (گوگل)' : 'Sign In with Google'}</span>
+                    </button>
+                    <button class="aqm-sw-btn" id="aqm-sw-toggle-manual-token-btn" style="flex:1;padding:6px 10px;font-size:11px;">
+                      <span>📋</span>
+                      <span>${isFa ? 'ورود با توکن دستی' : 'Direct Token Import'}</span>
+                    </button>
+                  </div>
+
+                  ${swShowTokenInput ? `
+                    <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);">
+                      <textarea id="aqm-sw-token-input" placeholder="${isFa ? 'متن توکن یا سشن را اینجا جای‌گذاری کنید...' : 'Paste token or JSON payload here...'}" style="width:100%;height:52px;border-radius:8px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);color:#fff;font-size:10.5px;padding:6px 8px;resize:none;font-family:'JetBrains Mono',monospace;outline:none;" dir="ltr"></textarea>
+                      <div style="display:flex;justify-content:flex-end;">
+                        <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-submit-token-btn" style="padding:4px 12px;font-size:11px;">
+                          <span>${isFa ? 'ثبت و ذخیره توکن' : 'Save Token'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  ` : ''}
+
+                  ${swOAuthUrl ? `
+                    <div id="aqm-oauth-live-box" style="margin-top:10px;padding:12px;border-radius:12px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);text-align:center;">
+                      <div style="font-size:12px;font-weight:700;color:#93c5fd;margin-bottom:5px;">
+                        🌐 ${isFa ? 'صفحه ورود گوگل در مرورگر باز شد' : 'Google Sign-In Opened in Chrome'}
+                      </div>
+                      <div style="font-size:10.5px;color:#cbd5e1;margin-bottom:10px;line-height:1.5;">
+                        ${isFa ? 'اگر صفحه ورود در مرورگر باز نشد، روی دکمه زیر کلیک کنید:' : 'If browser did not open automatically, click below:'}
+                      </div>
+                      <a href="${swOAuthUrl}" target="_blank" rel="noreferrer" class="aqm-sw-btn aqm-sw-btn-primary" style="display:inline-block;text-decoration:none;padding:7px 18px;font-size:11.5px;font-weight:700;border-radius:8px;">
+                        🔗 ${isFa ? 'ورود به حساب گوگل (کلیک مستقیم)' : 'Direct Google Sign-In Link'}
+                      </a>
+                    </div>
+                  ` : ''}
+                </div>
+              ` : ''}
+
+              <!-- LIST OF SAVED ACCOUNTS -->
               ${savedCount === 0 ? `
-                <div class="aqm-sw-card" style="text-align:center;padding:28px 20px;border-style:dashed;">
-                  <div style="font-size:32px;margin-bottom:8px;">💾</div>
-                  <div style="font-size:13px;font-weight:700;margin-bottom:4px;">${t.noSavedAccounts}</div>
-                  <div style="font-size:11.5px;color:#94a3b8;margin-bottom:14px;">با ذخیره کردن اکانت، می‌توانید هر زمان که بخواهید با یک کلیک بین اکانت‌ها جابجا شوید.</div>
-                  <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-save-current-empty-btn">
-                    <span>💾</span>
-                    <span>${t.saveCurrent}</span>
+                <div class="aqm-sw-card" style="text-align:center;padding:20px 14px;border-style:dashed;">
+                  <div style="font-size:11.5px;color:#94a3b8;margin-bottom:8px;">${isFa ? 'هنوز حسابی ذخیره نشده است.' : 'No accounts saved yet.'}</div>
+                  <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-save-current-empty-btn" style="padding:5px 12px;">
+                    <span>${isFa ? 'ذخیره اکانت فعلی' : 'Save Current Account'}</span>
                   </button>
                 </div>
               ` : `
-                <div style="display:flex;flex-direction:column;gap:10px;">
+                <div style="display:flex;flex-direction:column;gap:5px;max-height:200px;overflow-y:auto;" class="aqm-custom-scroll">
                   ${savedKeys.map(k => {
-                    const acc = swState.savedAccounts[k];
-                    const isCur = (acc.email && acc.email.toLowerCase() === email.toLowerCase());
+                    const acc = (swState.savedAccounts && swState.savedAccounts[k]) || {};
+                    const isCur = (k === email || acc.email === email);
+                    const accEmailStr = acc.email || k;
+                    const accShort = getCleanUserDisplayName(acc.name, accEmailStr);
+                    const accInitial = accShort.charAt(0).toUpperCase();
                     return `
-                      <div class="aqm-sw-card" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;${isCur ? 'border-color:rgba(56,189,248,0.4);background:rgba(56,189,248,0.04);' : ''}">
-                        <div style="display:flex;align-items:center;gap:12px;">
-                          <div style="width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;border:1px solid rgba(255,255,255,0.15);">
-                            ${(acc.email || k)[0].toUpperCase()}
+                      <div class="aqm-sw-card" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;${isCur ? 'border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.03);' : ''}">
+                        <div style="display:flex;align-items:center;gap:9px;">
+                          <div style="width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:700;">
+                            ${accInitial}
                           </div>
                           <div>
-                            <div style="display:flex;align-items:center;gap:8px;">
-                              <span style="font-size:13px;font-weight:700;" dir="ltr">${acc.email || k}</span>
-                              <span style="font-size:9.5px;padding:1px 6px;border-radius:9999px;background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.3);text-transform:uppercase;">${acc.tier || 'PRO'}</span>
-                              ${isCur ? `<span style="font-size:9.5px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.2);color:#10b981;font-weight:800;">فعال</span>` : ''}
+                            <div style="display:flex;align-items:center;gap:6px;">
+                              <span style="font-size:12px;font-weight:700;">${accShort}</span>
+                              <span style="font-size:8.5px;padding:1px 5px;border-radius:9999px;background:rgba(255,255,255,0.06);color:#94a3b8;text-transform:uppercase;">${acc.tier_code || 'PRO'}</span>
                             </div>
-                            <div style="font-size:11px;color:#94a3b8;">${acc.name || ''} ${acc.saved_at ? `• ذخیره: ${acc.saved_at.split(' ')[0]}` : ''}</div>
+                            <div style="font-size:10.5px;color:#64748b;font-family:'JetBrains Mono',monospace;" dir="ltr">${acc.email || k}</div>
                           </div>
                         </div>
 
-                        <div style="display:flex;align-items:center;gap:8px;">
-                          ${!isCur ? `
-                            <button class="aqm-sw-btn aqm-sw-btn-primary" data-action="switch" data-acc="${k}" style="padding:6px 12px;font-size:11px;">
-                              <span>⚡️</span>
-                              <span>${t.switchNow}</span>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                          ${isCur ? `
+                            <span style="font-size:10.5px;color:#10b981;font-weight:700;padding:2px 8px;">${isFa ? 'فعال' : 'Active'}</span>
+                          ` : `
+                            <button class="aqm-sw-btn aqm-sw-btn-primary" data-action="switch" data-acc="${k}" style="padding:3px 10px;font-size:11px;">
+                              <span>${isFa ? 'سوئیچ' : 'Switch'}</span>
                             </button>
-                          ` : ''}
-                          <button class="aqm-sw-btn" data-action="prep-migrate" data-acc="${k}" title="مهاجرت به این اکانت" style="padding:6px 10px;font-size:11px;">
-                            <span>⇄</span>
-                          </button>
-                          <button class="aqm-sw-btn" data-action="delete" data-acc="${k}" title="${t.deleteAccount}" style="padding:6px 10px;font-size:11px;color:#ef4444;">
-                            <span>🗑️</span>
+                          `}
+                          <button class="aqm-sw-btn" data-action="delete" data-acc="${k}" title="${isFa ? 'حذف از لیست' : 'Delete'}" style="padding:3px 7px;font-size:10.5px;color:#94a3b8;border-color:transparent;background:transparent;">
+                            <span>✕</span>
                           </button>
                         </div>
                       </div>
@@ -2586,127 +3028,94 @@
               `}
             </div>
           ` : `
-            <!-- MIGRATION HUB TAB -->
-            <div style="display:flex;flex-direction:column;gap:14px;">
-              
-              <!-- Notice Card -->
-              <div class="aqm-sw-card" style="background:rgba(59,130,246,0.06);border-color:rgba(59,130,246,0.25);padding:14px 18px;">
-                <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-                  <span style="font-size:20px;">🚀</span>
-                  <div style="font-size:13.5px;font-weight:800;color:#60a5fa;">${t.tabMigration}</div>
-                </div>
-                <div style="font-size:11.5px;color:#cbd5e1;line-height:1.6;">
-                  انتقال، کپی ایمن، یا تجمیع پروژه‌ها، گفت‌وگوهای ایجنت، و دیتابیس‌های سشن بین اکانت‌های گوگل با حفظ ۱۰۰٪ کامل داده‌ها و آرتیفکت‌های مغز ایجنت (Brain).
-                </div>
-              </div>
-
-              <!-- Options Grid -->
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <!-- MIGRATION TAB -->
+            <div style="display:flex;flex-direction:column;gap:10px;">
+              <!-- Target Account & Transfer Mode Grid -->
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
                 
-                <!-- Target Account Dropdown -->
-                <div class="aqm-sw-card" style="padding:14px;">
-                  <label style="font-size:12px;font-weight:800;margin-bottom:8px;display:block;">${t.targetAccount}</label>
-                  <select id="aqm-sw-target-select" style="width:100%;padding:8px 12px;border-radius:12px;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.18);color:#fff;font-size:12px;outline:none;" dir="ltr">
+                <!-- Target Account -->
+                <div class="aqm-sw-card" style="padding:9px 11px;">
+                  <label style="font-size:10.5px;font-weight:700;margin-bottom:4px;display:block;color:#94a3b8;">${isFa ? 'اکانت مقصد:' : 'Target Account:'}</label>
+                  <select id="aqm-sw-target-select" style="width:100%;padding:5px 8px;border-radius:7px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.08);color:#fff;font-size:11px;outline:none;" dir="ltr">
                     ${savedKeys.length > 0 ? savedKeys.map(k => `
-                      <option value="${k}" ${k === swTargetAccount ? 'selected' : ''}>${swState.savedAccounts[k].email || k} (${swState.savedAccounts[k].tier || 'Pro'})</option>
+                      <option value="${k}" ${k === swTargetAccount ? 'selected' : ''}>${swState.savedAccounts[k].email || k}</option>
                     `).join('') : `
-                      <option value="">ابتدا یک اکانت مقصد در تب اکانت‌ها ذخیره کنید</option>
+                      <option value="">${isFa ? 'ابتدا یک اکانت مقصد ذخیره کنید' : 'No target accounts'}</option>
                     `}
                   </select>
                 </div>
 
                 <!-- Transfer Mode -->
-                <div class="aqm-sw-card" style="padding:14px;">
-                  <label style="font-size:12px;font-weight:800;margin-bottom:8px;display:block;">${t.transferMode}</label>
-                  <div style="display:flex;gap:6px;">
-                    <button class="aqm-sw-btn ${swMode === 'copy' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-mode-copy" style="flex:1;padding:7px 8px;font-size:11px;">
-                      <span>🛡️</span>
-                      <span>کپی ایمن</span>
+                <div class="aqm-sw-card" style="padding:9px 11px;">
+                  <label style="font-size:10.5px;font-weight:700;margin-bottom:4px;display:block;color:#94a3b8;">${isFa ? 'روش انتقال:' : 'Mode:'}</label>
+                  <div style="display:flex;gap:4px;">
+                    <button class="aqm-sw-btn ${swMode === 'copy' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-mode-copy" style="flex:1;padding:4px;font-size:10.5px;">
+                      <span>${isFa ? 'کپی ایمن' : 'Copy'}</span>
                     </button>
-                    <button class="aqm-sw-btn ${swMode === 'move' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-mode-move" style="flex:1;padding:7px 8px;font-size:11px;">
-                      <span>✂️</span>
-                      <span>انتقال و برش</span>
+                    <button class="aqm-sw-btn ${swMode === 'move' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-mode-move" style="flex:1;padding:4px;font-size:10.5px;">
+                      <span>${isFa ? 'برش و انتقال' : 'Move'}</span>
                     </button>
                   </div>
                 </div>
 
                 <!-- Structure Mode -->
-                <div class="aqm-sw-card" style="padding:14px;">
-                  <label style="font-size:12px;font-weight:800;margin-bottom:8px;display:block;">${t.structureMode}</label>
-                  <div style="display:flex;gap:6px;">
-                    <button class="aqm-sw-btn ${swStructure === 'separate' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-struct-sep" style="flex:1;padding:7px 8px;font-size:11px;">
-                      <span>📁</span>
-                      <span>پروژه‌های مجزا</span>
+                <div class="aqm-sw-card" style="padding:9px 11px;">
+                  <label style="font-size:10.5px;font-weight:700;margin-bottom:4px;display:block;color:#94a3b8;">${isFa ? 'ساختار مقصد:' : 'Structure:'}</label>
+                  <div style="display:flex;gap:4px;">
+                    <button class="aqm-sw-btn ${swStructure === 'separate' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-struct-sep" style="flex:1;padding:4px;font-size:10.5px;">
+                      <span>${isFa ? 'مجزا' : 'Separate'}</span>
                     </button>
-                    <button class="aqm-sw-btn ${swStructure === 'merge' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-struct-merge" style="flex:1;padding:7px 8px;font-size:11px;">
-                      <span>🔗</span>
-                      <span>ادغام پروژه‌ها</span>
+                    <button class="aqm-sw-btn ${swStructure === 'merge' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-struct-merge" style="flex:1;padding:4px;font-size:10.5px;">
+                      <span>${isFa ? 'ادغام' : 'Merge'}</span>
                     </button>
                   </div>
                 </div>
 
-                <!-- Dual-Sync -->
-                <div class="aqm-sw-card" style="padding:14px;display:flex;align-items:center;justify-content:space-between;">
+                <!-- Dual Sync Toggle -->
+                <div class="aqm-sw-card" style="padding:9px 11px;display:flex;align-items:center;justify-content:space-between;">
                   <div>
-                    <div style="font-size:12px;font-weight:800;margin-bottom:2px;">همگام‌سازی دوطرفه</div>
-                    <div style="font-size:10.5px;color:#94a3b8;">سینک تغییرات آتی در هر دو حساب</div>
+                    <div style="font-size:11px;font-weight:700;">${isFa ? 'سینک دوطرفه' : 'Dual-Sync'}</div>
+                    <div style="font-size:9.5px;color:#64748b;">${isFa ? 'همگام‌سازی تغییرات' : 'Sync updates'}</div>
                   </div>
-                  <input type="checkbox" id="aqm-sw-dual-sync" ${swDualSync ? 'checked' : ''} style="width:18px;height:18px;accent-color:#3b82f6;cursor:pointer;" />
+                  <input type="checkbox" id="aqm-sw-dual-sync" ${swDualSync ? 'checked' : ''} style="width:15px;height:15px;accent-color:#3b82f6;cursor:pointer;" />
                 </div>
 
               </div>
 
-              <!-- Conversation Selector List -->
-              <div class="aqm-sw-card" style="padding:16px;">
-                
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px;">
-                  <input type="text" id="aqm-sw-search-input" value="${swSearch}" placeholder="${t.searchPlaceholder}" style="flex:1;padding:8px 14px;border-radius:12px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.12);color:#fff;font-size:12px;outline:none;" />
-                  <button class="aqm-sw-btn" id="aqm-sw-select-all-btn" style="padding:7px 12px;font-size:11px;">
-                    ${swSelectedConvs.size === filteredConvs.length && filteredConvs.length > 0 ? t.deselectAll : t.selectAll} (${swSelectedConvs.size})
+              <!-- Conversation Selector -->
+              <div class="aqm-sw-card" style="padding:10px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;">
+                  <input type="text" id="aqm-sw-search-input" value="${swSearch}" placeholder="${isFa ? `جستجو در میان ${(swState.conversations || []).length} مکالمه...` : 'Search conversations...'}" style="flex:1;padding:5px 8px;border-radius:7px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);color:#fff;font-size:11px;outline:none;" />
+                  <button class="aqm-sw-btn" id="aqm-sw-select-all-btn" style="padding:4px 8px;font-size:10.5px;">
+                    ${swSelectedConvs.size === filteredConvs.length && filteredConvs.length > 0 ? (isFa ? 'عدم انتخاب همه' : 'Deselect All') : (isFa ? 'انتخاب همه' : 'Select All')} (${swSelectedConvs.size})
                   </button>
                 </div>
 
-                <div class="aqm-custom-scroll" style="max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;">
+                <div class="aqm-custom-scroll" style="max-height:130px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;">
                   ${filteredConvs.length === 0 ? `
-                    <div style="text-align:center;padding:24px;color:#94a3b8;font-size:12px;">هیچ مکالمه‌ای یافت نشد.</div>
+                    <div style="text-align:center;padding:12px;color:#64748b;font-size:11px;">${isFa ? 'هیچ مکالمه‌ای یافت نشد.' : 'No conversations found.'}</div>
                   ` : filteredConvs.map(c => {
                     const isChecked = swSelectedConvs.has(c.id);
                     return `
-                      <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:10px;background:${isChecked ? 'rgba(59,130,246,0.12)' : 'rgba(255,255,255,0.02)'};border:1px solid ${isChecked ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.05)'};cursor:pointer;transition:all 0.15s;">
-                        <input type="checkbox" data-cid="${c.id}" class="aqm-conv-checkbox" ${isChecked ? 'checked' : ''} style="width:16px;height:16px;accent-color:#3b82f6;cursor:pointer;" />
+                      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:7px;background:${isChecked ? 'rgba(59,130,246,0.08)' : 'rgba(255,255,255,0.015)'};border:1px solid ${isChecked ? 'rgba(59,130,246,0.25)' : 'rgba(255,255,255,0.04)'};cursor:pointer;transition:all 0.12s;">
+                        <input type="checkbox" data-cid="${c.id}" class="aqm-conv-checkbox" ${isChecked ? 'checked' : ''} style="width:13px;height:13px;accent-color:#3b82f6;cursor:pointer;" />
                         <div style="flex:1;overflow:hidden;">
-                          <div style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.title || c.id}</div>
-                          <div style="font-size:10px;color:#94a3b8;display:flex;gap:10px;">
-                            <span dir="ltr">${c.last_modified || ''}</span>
-                            <span>${c.size_kb} KB</span>
-                            ${c.has_brain ? `<span style="color:#a855f7;">• Brain: فعال</span>` : ''}
-                          </div>
+                          <div style="font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.title || c.id}</div>
                         </div>
+                        <span style="font-size:9px;color:#64748b;font-family:'JetBrains Mono',monospace;">${(c.updated_at || '').split(' ')[0] || ''}</span>
                       </label>
                     `;
                   }).join('')}
                 </div>
-
               </div>
 
               <!-- Start Migration Button -->
-              <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-start-migration-btn" style="padding:12px;font-size:13px;border-radius:14px;box-shadow:0 6px 20px rgba(59,130,246,0.4);" ${swIsMigrating ? 'disabled' : ''}>
-                <span>${swIsMigrating ? '⏳' : '🚀'}</span>
-                <span>${swIsMigrating ? t.migrating : `${t.startMigration} (${swSelectedConvs.size} مکالمه)`}</span>
+              <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-start-migration-btn" style="padding:8px;font-size:11.5px;border-radius:9px;" ${swIsMigrating ? 'disabled' : ''}>
+                <span>${swIsMigrating ? (isFa ? 'در حال انتقال...' : 'Migrating...') : (isFa ? `انتقال ${swSelectedConvs.size} مکالمه به اکانت مقصد` : `Migrate ${swSelectedConvs.size} Chats`)}</span>
               </button>
-
             </div>
           `}
 
-        </div>
-
-        <!-- Footer -->
-        <div style="padding:12px 24px;border-top:1px solid rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:space-between;font-size:11px;color:${theme.subText || '#94a3b8'};background:rgba(0,0,0,0.15);flex-shrink:0;">
-          <div>
-            <span>${t.author} • </span>
-            <a href="https://github.com/Madgod-xyz/antigravity-account-switcher" target="_blank" style="color:#38bdf8;text-decoration:none;font-weight:700;">GitHub Repository</a>
-          </div>
-          <div style="opacity:0.8;">iOS Liquid Glass Engine</div>
         </div>
 
       </div>
@@ -2716,14 +3125,14 @@
     const closeBtn = modal.querySelector('#aqm-sw-modal-close');
     if (closeBtn) closeBtn.onclick = closeSwitcherModal;
 
-    modal.querySelectorAll('.aqm-lang-btn').forEach(btn => {
-      btn.onclick = () => {
-        const lang = btn.getAttribute('data-lang');
-        swLang = lang;
-        try { localStorage.setItem('antigravity:switcher_lang', lang); } catch(e){}
+    const langBtn = modal.querySelector('#aqm-lang-toggle-btn');
+    if (langBtn) {
+      langBtn.onclick = () => {
+        swLang = (swLang === 'fa' ? 'en' : 'fa');
+        persistSetting('antigravity:switcher_lang', swLang);
         renderSwitcherModal();
       };
-    });
+    }
 
     const tabAcc = modal.querySelector('#aqm-tab-btn-accounts');
     if (tabAcc) tabAcc.onclick = () => { swTab = 'accounts'; renderSwitcherModal(); };
@@ -2734,21 +3143,20 @@
     const saveCurBtn = modal.querySelector('#aqm-sw-save-current-btn') || modal.querySelector('#aqm-sw-save-current-empty-btn');
     if (saveCurBtn) {
       saveCurBtn.onclick = () => {
-        saveCurBtn.style.transform = 'scale(0.95)';
-        setTimeout(() => { saveCurBtn.style.transform = ''; }, 150);
-        showSwitcherToast('در حال ذخیره اکانت...');
+        showSwitcherToast(isFa ? 'در حال ذخیره اکانت...' : 'Saving account...');
+        if (callDaemonIpc('save')) return;
         fetch('http://127.0.0.1:39281/api/save', { method: 'POST' })
           .then(r => r.json())
           .then(res => {
             if (res.success) {
-              showSwitcherToast(t.accountSaved || 'اکانت با موفقیت ذخیره شد!');
+              showSwitcherToast(isFa ? 'اکانت فعلی با موفقیت ذخیره شد' : 'Account saved successfully');
               fetchSwitcherState(() => { renderSwitcherModal(); });
             } else {
-              showSwitcherToast(res.error || 'خطا در ذخیره اکانت', true);
+              showSwitcherToast(res.error || (isFa ? 'خطا در ذخیره اکانت' : 'Error saving account'), true);
             }
           })
-          .catch(err => {
-            showSwitcherToast('ارتباط با دیمن برقرار نشد', true);
+          .catch(() => {
+            showSwitcherToast(isFa ? 'خطا در اتصال به سرویس لوکال' : 'Connection error', true);
           });
       };
     }
@@ -2756,57 +3164,137 @@
     const refreshBtn = modal.querySelector('#aqm-sw-refresh-btn');
     if (refreshBtn) {
       refreshBtn.onclick = () => {
-        refreshBtn.style.transform = 'rotate(180deg)';
-        setTimeout(() => { refreshBtn.style.transform = ''; }, 300);
         fetchSwitcherState(() => {
-          showSwitcherToast('سهمیه و اکانت‌ها به‌روزرسانی شدند');
+          showSwitcherToast(isFa ? 'سهمیه و اکانت‌ها بروزرسانی شد' : 'Updated');
           renderSwitcherModal();
         });
       };
     }
 
-    const addNewBtn = modal.querySelector('#aqm-sw-add-new-btn');
-    if (addNewBtn) {
-      addNewBtn.onclick = () => {
-        if (confirm('آیا مایل به خروج از حساب فعلی جهت ورود با اکانت جدید هستید؟')) {
-          showSwitcherToast('در حال خروج...');
-          fetch('http://127.0.0.1:39281/api/logout', { method: 'POST' });
-        }
+    // Toggle Add Account Drawer
+    const toggleAddBtn = modal.querySelector('#aqm-sw-toggle-add-btn');
+    if (toggleAddBtn) {
+      toggleAddBtn.onclick = () => {
+        swShowAddPanel = !swShowAddPanel;
+        swShowTokenInput = false;
+        renderSwitcherModal();
       };
     }
 
-    // Saved accounts click actions
-    modal.querySelectorAll('[data-action="switch"]').forEach(b => {
-      b.onclick = () => {
-        const accKey = b.getAttribute('data-acc');
-        showSwitcherToast(t.switching || 'در حال اعمال اکانت و راه‌اندازی مجدد...');
+    // Toggle Manual Token Input
+    const toggleTokenBtn = modal.querySelector('#aqm-sw-toggle-manual-token-btn');
+    if (toggleTokenBtn) {
+      toggleTokenBtn.onclick = () => {
+        swShowTokenInput = !swShowTokenInput;
+        renderSwitcherModal();
+      };
+    }
+
+    // Submit Manual Token
+    const submitTokenBtn = modal.querySelector('#aqm-sw-submit-token-btn');
+    if (submitTokenBtn) {
+      submitTokenBtn.onclick = () => {
+        const input = modal.querySelector('#aqm-sw-token-input');
+        const tokVal = input ? input.value.trim() : '';
+        if (!tokVal) {
+          showSwitcherToast(isFa ? 'لطفاً متن توکن را وارد کنید' : 'Please enter token', true);
+          return;
+        }
+        showSwitcherToast(isFa ? 'در حال اعتبارسنجی و ثبت توکن...' : 'Importing token...');
+        if (callDaemonIpc('import', { token: tokVal })) {
+          swShowAddPanel = false;
+          swShowTokenInput = false;
+          return;
+        }
+        fetch('http://127.0.0.1:39281/api/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: tokVal })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res.success) {
+            showSwitcherToast(isFa ? `اکانت ${res.email || ''} با موفقیت افزوده شد` : 'Account imported successfully');
+            swShowAddPanel = false;
+            swShowTokenInput = false;
+            fetchSwitcherState(() => { renderSwitcherModal(); });
+          } else {
+            showSwitcherToast(res.error || (isFa ? 'فرمت توکن نامعتبر است' : 'Invalid token format'), true);
+          }
+        })
+        .catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرویس' : 'Service error', true);
+        });
+      };
+    }
+
+    // Safe Google OAuth Sign In (In-Browser Google OAuth)
+    const addOAuthBtn = modal.querySelector('#aqm-sw-add-oauth-btn');
+    if (addOAuthBtn) {
+      addOAuthBtn.onclick = () => {
+        showSwitcherToast(isFa ? 'در حال باز کردن مرورگر کروم برای ورود به گوگل...' : 'Opening Chrome for Google sign-in...');
+        fetch('http://127.0.0.1:39281/api/oauth_signin', { method: 'POST' })
+          .then(r => r.json())
+          .then(res => {
+            if (res && res.auth_url) {
+              swOAuthUrl = res.auth_url;
+              renderSwitcherModal();
+              try { window.open(res.auth_url, '_blank'); } catch(e) {}
+              showSwitcherToast(isFa 
+                ? 'مرورگر باز شد. اگر باز نشد، <a href="' + res.auth_url + '" target="_blank" style="color:#93c5fd;text-decoration:underline;font-weight:700;">اینجا کلیک کنید</a>'
+                : 'Browser opened. If not, <a href="' + res.auth_url + '" target="_blank">click here</a>');
+            }
+          })
+          .catch(() => {
+            callDaemonIpc('oauth_signin');
+          });
+      };
+    }
+
+    // Switch Account action
+    modal.querySelectorAll('[data-action="switch"]').forEach(btn => {
+      btn.onclick = () => {
+        const accKey = btn.getAttribute('data-acc');
+        showSwitcherToast(isFa ? 'در حال جابجایی حساب و راه‌اندازی مجدد...' : 'Switching account & restarting...');
+        if (callDaemonIpc('switch', { accountKey: accKey })) return;
         fetch('http://127.0.0.1:39281/api/switch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ accountKey: accKey })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res.success) {
+            showSwitcherToast(isFa ? 'حساب فعال شد. در حال راه‌اندازی مجدد...' : 'Account active. Restarting...');
+            fetchSwitcherState(() => { renderSwitcherModal(); });
+          } else {
+            showSwitcherToast(res.error || (isFa ? 'خطا در جابجایی حساب' : 'Switch error'), true);
+          }
+        })
+        .catch(() => {
+          showSwitcherToast(isFa ? 'خطا در اتصال به سرویس لوکال' : 'Connection error', true);
         });
       };
     });
 
-    modal.querySelectorAll('[data-action="prep-migrate"]').forEach(b => {
-      b.onclick = () => {
-        swTargetAccount = b.getAttribute('data-acc');
-        swTab = 'migration';
-        renderSwitcherModal();
-      };
-    });
-
-    modal.querySelectorAll('[data-action="delete"]').forEach(b => {
-      b.onclick = () => {
-        const accKey = b.getAttribute('data-acc');
-        if (confirm(`آیا از حذف اکانت ${accKey} مطمئن هستید؟`)) {
+    // Delete Account action
+    modal.querySelectorAll('[data-action="delete"]').forEach(btn => {
+      btn.onclick = () => {
+        const accKey = btn.getAttribute('data-acc');
+        const confirmMsg = isFa ? `آیا از حذف اکانت "${accKey}" از لیست مطمئن هستید؟` : `Delete account "${accKey}" from list?`;
+        if (confirm(confirmMsg)) {
+          if (callDaemonIpc('delete', { accountKey: accKey })) return;
           fetch('http://127.0.0.1:39281/api/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ accountKey: accKey })
-          }).then(() => {
-            showSwitcherToast('اکانت حذف شد.');
-            fetchSwitcherState(() => { renderSwitcherModal(); });
+          })
+          .then(r => r.json())
+          .then(res => {
+            if (res.success) {
+              showSwitcherToast(isFa ? 'اکانت از لیست حذف شد' : 'Account removed');
+              fetchSwitcherState(() => { renderSwitcherModal(); });
+            }
           });
         }
       };
@@ -2815,41 +3303,37 @@
     // Migration tab actions
     const targetSelect = modal.querySelector('#aqm-sw-target-select');
     if (targetSelect) {
-      targetSelect.onchange = () => { swTargetAccount = targetSelect.value; };
+      targetSelect.onchange = (e) => {
+        swTargetAccount = e.target.value;
+      };
     }
 
-    const modeCopyBtn = modal.querySelector('#aqm-sw-mode-copy');
-    if (modeCopyBtn) {
-      modeCopyBtn.onclick = () => { swMode = 'copy'; renderSwitcherModal(); };
-    }
-    const modeMoveBtn = modal.querySelector('#aqm-sw-mode-move');
-    if (modeMoveBtn) {
-      modeMoveBtn.onclick = () => { swMode = 'move'; renderSwitcherModal(); };
-    }
+    const copyBtn = modal.querySelector('#aqm-sw-mode-copy');
+    if (copyBtn) copyBtn.onclick = () => { swMode = 'copy'; renderSwitcherModal(); };
+    const moveBtn = modal.querySelector('#aqm-sw-mode-move');
+    if (moveBtn) moveBtn.onclick = () => { swMode = 'move'; renderSwitcherModal(); };
 
-    const structSepBtn = modal.querySelector('#aqm-sw-struct-sep');
-    if (structSepBtn) {
-      structSepBtn.onclick = () => { swStructure = 'separate'; renderSwitcherModal(); };
-    }
-    const structMergeBtn = modal.querySelector('#aqm-sw-struct-merge');
-    if (structMergeBtn) {
-      structMergeBtn.onclick = () => { swStructure = 'merge'; renderSwitcherModal(); };
-    }
+    const sepBtn = modal.querySelector('#aqm-sw-struct-sep');
+    if (sepBtn) sepBtn.onclick = () => { swStructure = 'separate'; renderSwitcherModal(); };
+    const mergeBtn = modal.querySelector('#aqm-sw-struct-merge');
+    if (mergeBtn) mergeBtn.onclick = () => { swStructure = 'merge'; renderSwitcherModal(); };
 
-    const dualSyncCheck = modal.querySelector('#aqm-sw-dual-sync');
-    if (dualSyncCheck) {
-      dualSyncCheck.onchange = () => { swDualSync = dualSyncCheck.checked; };
+    const dualSyncCb = modal.querySelector('#aqm-sw-dual-sync');
+    if (dualSyncCb) {
+      dualSyncCb.onchange = (e) => {
+        swDualSync = e.target.checked;
+      };
     }
 
     const searchInput = modal.querySelector('#aqm-sw-search-input');
     if (searchInput) {
-      searchInput.oninput = () => {
-        swSearch = searchInput.value;
+      searchInput.oninput = (e) => {
+        swSearch = e.target.value;
         renderSwitcherModal();
-        const freshInput = modal.querySelector('#aqm-sw-search-input');
-        if (freshInput) {
-          freshInput.focus();
-          freshInput.setSelectionRange(freshInput.value.length, freshInput.value.length);
+        const nextInput = modal.querySelector('#aqm-sw-search-input');
+        if (nextInput) {
+          nextInput.focus();
+          nextInput.selectionStart = nextInput.selectionEnd = nextInput.value.length;
         }
       };
     }
@@ -2867,7 +3351,7 @@
     }
 
     modal.querySelectorAll('.aqm-conv-checkbox').forEach(cb => {
-      cb.onchange = () => {
+      cb.onchange = (e) => {
         const cid = cb.getAttribute('data-cid');
         if (cb.checked) swSelectedConvs.add(cid);
         else swSelectedConvs.delete(cid);
@@ -2879,24 +3363,24 @@
     if (startMigrateBtn) {
       startMigrateBtn.onclick = () => {
         if (swSelectedConvs.size === 0) {
-          showSwitcherToast('لطفاً حداقل یک مکالمه را انتخاب کنید', true);
+          showSwitcherToast(isFa ? 'حداقل یک گفتگو را برای انتقال انتخاب کنید' : 'Select at least one conversation', true);
           return;
         }
         if (!swTargetAccount) {
-          showSwitcherToast('لطفاً اکانت مقصد را انتخاب کنید', true);
+          showSwitcherToast(isFa ? 'لطفاً اکانت مقصد را انتخاب کنید' : 'Select target account', true);
           return;
         }
-
         swIsMigrating = true;
         renderSwitcherModal();
-        showSwitcherToast(t.migrating);
+        showSwitcherToast(isFa ? 'در حال انتقال مکالمات...' : 'Migrating conversations...');
 
+        const activeKey = email || (activeAcc && activeAcc.email) || 'Active Account';
         fetch('http://127.0.0.1:39281/api/migrate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             conversationIds: Array.from(swSelectedConvs),
-            sourceAccount: email,
+            sourceAccount: activeKey,
             targetAccount: swTargetAccount,
             mode: swMode,
             structure: swStructure,
@@ -2907,17 +3391,17 @@
         .then(res => {
           swIsMigrating = false;
           if (res.success) {
-            showSwitcherToast(`${t.migrationDone} (${res.migrated_count} پروژه منتقل شد)`);
+            showSwitcherToast(isFa ? `انتقال ${res.migrated_count || swSelectedConvs.size} گفتگو با موفقیت انجام شد` : 'Migration completed!');
             swSelectedConvs.clear();
             fetchSwitcherState(() => { renderSwitcherModal(); });
           } else {
-            showSwitcherToast(res.error || 'خطا در مهاجرت چت‌ها', true);
+            showSwitcherToast(res.error || (isFa ? 'خطا در انتقال' : 'Migration error'), true);
             renderSwitcherModal();
           }
         })
         .catch(err => {
           swIsMigrating = false;
-          showSwitcherToast('ارتباط با دیمن مهاجرت برقرار نشد', true);
+          showSwitcherToast(isFa ? 'ارتباط با سرویس برقرار نشد' : 'Service error', true);
           renderSwitcherModal();
         });
       };
@@ -2992,9 +3476,11 @@
     pill.style.transition = 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)';
 
     const isRem = (displayMode === 'remaining');
-    const sessUsed = Math.round(currentUsage.session?.used_pct ?? 28);
-    const sessRem = Math.round(currentUsage.session?.remaining_pct ?? (100 - sessUsed));
-    const sessReset = currentUsage.session?.resets_in || '2 hr 4 min';
+    const activePool = (typeof getActiveModelPool === 'function') ? getActiveModelPool(currentUsage) : (currentUsage.session || {});
+    const activeModelTitle = activePool.name || getActiveModelName() || 'Gemini Quota';
+    const sessUsed = Math.round(activePool.used_pct ?? (currentUsage.session?.used_pct ?? 28));
+    const sessRem = Math.round(activePool.remaining_pct ?? (currentUsage.session?.remaining_pct ?? (100 - sessUsed)));
+    const sessReset = activePool.resets_in || currentUsage.session?.resets_in || '2 hr 4 min';
 
     const weekUsed = Math.round(currentUsage.weekly?.used_pct ?? 27);
     const weekRem = Math.round(currentUsage.weekly?.remaining_pct ?? (100 - weekUsed));
@@ -3002,11 +3488,20 @@
     const badgeSess = isRem ? sessRem : sessUsed;
     const badgeWeek = isRem ? weekRem : weekUsed;
 
-    const titleTooltip = `Gemini Quota HUD\n• 5-Hour: ${sessRem}% Remaining (${sessUsed}% Used)\n• Weekly: ${weekRem}% Remaining (${weekUsed}% Used)\n• Resets in: ${sessReset}\nClick to view full HUD`;
+    // Smart status dot color based on active model quota health
+    const activeRemFraction = sessRem;
+    let quotaDotColor = theme.dotColor;
+    if (activeRemFraction <= 10) {
+      quotaDotColor = '#f43f5e'; // Red for critically low
+    } else if (activeRemFraction <= 25) {
+      quotaDotColor = '#fbbf24'; // Amber warning
+    }
+
+    const titleTooltip = `${activeModelTitle} HUD\n• 5-Hour: ${sessRem}% Remaining (${sessUsed}% Used)\n• Weekly: ${weekRem}% Remaining (${weekUsed}% Used)\n• Resets in: ${sessReset}\nClick to view full HUD`;
 
     badge.title = titleTooltip;
     badge.innerHTML = `
-      <span style="width:5.5px;height:5.5px;border-radius:50%;background:${theme.dotColor};box-shadow:0 0 7px ${theme.dotColor};animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
+      <span style="width:5.5px;height:5.5px;border-radius:50%;background:${quotaDotColor};box-shadow:0 0 7px ${quotaDotColor};animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
       <span dir="ltr">${badgeSess}%</span>
       <span style="opacity:0.35;font-weight:400;margin:0 1px;">|</span>
       <span style="opacity:0.85;font-size:10px;font-weight:600;" dir="ltr">W: ${badgeWeek}%</span>
@@ -3014,7 +3509,7 @@
 
     pill.title = titleTooltip;
     pill.innerHTML = `
-      <span style="width:5.5px;height:5.5px;border-radius:50%;background:${theme.dotColor};box-shadow:0 0 7px ${theme.dotColor};animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
+      <span style="width:5.5px;height:5.5px;border-radius:50%;background:${quotaDotColor};box-shadow:0 0 7px ${quotaDotColor};animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
       <span class="${isRefreshing ? 'aqm-rotating' : ''}" style="color:${theme.id === 'pastel' ? '#ff70a6' : '#fbbf24'};display:flex;align-items:center;filter:drop-shadow(0 0 5px ${theme.id === 'pastel' ? 'rgba(255,112,166,0.6)' : 'rgba(251,191,36,0.6)'});">
         ${theme.id === 'pastel' ? '🌸' : SVGS.lightning}
       </span>
@@ -3050,10 +3545,9 @@
     accPill.style.cursor = 'pointer';
     accPill.style.userSelect = 'none';
     accPill.style.transition = 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)';
-
     const accUser = swState.activeAccount || {};
-    const accEmail = accUser.email || currentUsage.email || 'madgod.cum@gmail.com';
-    const accName = accUser.name || (accEmail ? accEmail.split('@')[0] : 'Madgod');
+    const accEmail = accUser.email || currentUsage.email || 'developer@antigravity.ai';
+    const accName = getCleanUserDisplayName(accUser.name, accEmail);
     const accAvatar = accUser.avatar || '';
     const accTier = accUser.tier || 'Google AI Pro';
     const accTierCode = (accUser.tier_code || 'pro').toLowerCase();
@@ -3062,18 +3556,26 @@
     const tierBadgeColor = accTierCode === 'ultra' ? '#ffffff' : (accTierCode === 'pro' ? '#fbbf24' : '#94a3b8');
     const tierBadgeBorder = accTierCode === 'ultra' ? 'rgba(236,72,153,0.5)' : (accTierCode === 'pro' ? 'rgba(251,191,36,0.45)' : 'rgba(148,163,184,0.25)');
 
-    accPill.title = `اکانت فعال: ${accEmail} (${accTier})\nبرای سوئیچ اکانت یا جابجایی پروژه‌ها کلیک کنید`;
+    accPill.title = `اکانت فعال: ${accName} (${accTier})\nبرای سوئیچ اکانت یا جابجایی پروژه‌ها کلیک کنید`;
     accPill.innerHTML = `
-      <span style="width:6px;height:6px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
-      ${accAvatar ? `<img src="${accAvatar}" style="width:17px;height:17px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,255,255,0.3);" />` : `<span style="font-size:11px;">⚡️</span>`}
-      <span style="letter-spacing:-0.01em;font-weight:700;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" dir="ltr">${accName}</span>
-      <span style="font-size:9px;font-weight:800;padding:1px 6px;border-radius:9999px;background:${tierBadgeBg};color:${tierBadgeColor};border:1px solid ${tierBadgeBorder};text-transform:uppercase;letter-spacing:0.02em;">${accTierCode.toUpperCase()}</span>
-      <span style="font-size:8px;opacity:0.6;margin-left:1px;">▼</span>
+      <span style="width:6px;height:6px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:aqm-pulse-dot 2s infinite ease-in-out;pointer-events:none;"></span>
+      ${accAvatar ? `<img src="${accAvatar}" style="width:17px;height:17px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,255,255,0.3);pointer-events:none;" />` : `<span style="font-size:11px;pointer-events:none;">⚡️</span>`}
+      <span style="letter-spacing:-0.01em;font-weight:700;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;" dir="ltr">${accName}</span>
+      <span style="font-size:9px;font-weight:800;padding:1px 6px;border-radius:9999px;background:${tierBadgeBg};color:${tierBadgeColor};border:1px solid ${tierBadgeBorder};text-transform:uppercase;letter-spacing:0.02em;pointer-events:none;">${accTierCode.toUpperCase()}</span>
+      <span style="font-size:8px;opacity:0.6;margin-left:1px;pointer-events:none;">▼</span>
     `;
 
     accPill.onclick = (e) => {
-      e.stopPropagation();
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
       toggleSwitcherModal();
+    };
+    accPill.onpointerdown = (e) => {
+      if (e) {
+        e.stopPropagation();
+      }
     };
 
     accPill.onmouseenter = () => { accPill.style.transform = 'translateY(-1px) scale(1.02)'; };
@@ -3139,6 +3641,9 @@
     }, 1200);
   }
 
+  window.__openSwitcherModal = openSwitcherModal;
+  window.__closeSwitcherModal = closeSwitcherModal;
+  window.__toggleSwitcherModal = toggleSwitcherModal;
   window.__renderAntigravityBadge = renderBadge;
   window.__refreshAntigravityQuota = refreshQuota;
   window.__openAntigravityPopover = () => {
@@ -3154,7 +3659,7 @@
   window.__setAntigravityTheme = (themeId) => {
     if (THEMES[themeId]) {
       currentThemeId = themeId;
-      try { localStorage.setItem('antigravity:quota_theme', themeId); } catch (e) {}
+      persistSetting('antigravity:quota_theme', themeId);
       applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
       renderBadge();
       renderPopover();
@@ -3162,18 +3667,18 @@
   };
   window.__toggleFullAppTheming = (enabled) => {
     isFullAppThemingEnabled = !!enabled;
-    try { localStorage.setItem('antigravity:full_app_theming', String(isFullAppThemingEnabled)); } catch (e) {}
+    persistSetting('antigravity:full_app_theming', isFullAppThemingEnabled);
     applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
     renderPopover();
   };
   window.__toggleAntigravityPrivacyMode = (enabled) => {
     isPrivacyMode = (typeof enabled === 'boolean') ? enabled : !isPrivacyMode;
-    try { localStorage.setItem('antigravity:privacy_mode', String(isPrivacyMode)); } catch (e) {}
+    persistSetting('antigravity:privacy_mode', isPrivacyMode);
     renderPopover();
   };
   window.__setAntigravityFont = (en, fa) => {
-    if (en) { customFontEn = en; try { localStorage.setItem('antigravity:custom_font_en', en); } catch(e){} }
-    if (fa) { customFontFa = fa; try { localStorage.setItem('antigravity:custom_font_fa', fa); } catch(e){} }
+    if (en) { customFontEn = en; persistSetting('antigravity:custom_font_en', en); }
+    if (fa) { customFontFa = fa; persistSetting('antigravity:custom_font_fa', fa); }
     applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
     renderBadge();
     renderPopover();
@@ -3182,15 +3687,15 @@
     if (!name) return;
     if (!customImportedFonts.some(f => f.id.toLowerCase() === name.toLowerCase())) {
       customImportedFonts.push({ id: name, name, url, type });
-      try { localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(customImportedFonts)); } catch(e){}
+      persistSetting('antigravity:custom_imported_fonts', customImportedFonts);
     }
     if (url) injectImportedFontStyles();
     if (type === 'fa') {
       customFontFa = name;
-      try { localStorage.setItem('antigravity:custom_font_fa', name); } catch(e){}
+      persistSetting('antigravity:custom_font_fa', name);
     } else {
       customFontEn = name;
-      try { localStorage.setItem('antigravity:custom_font_en', name); } catch(e){}
+      persistSetting('antigravity:custom_font_en', name);
     }
     ensureFontLoaded(name);
     applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
