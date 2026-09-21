@@ -61,18 +61,18 @@
 ### Windows (PowerShell)
 Open PowerShell and run:
 ```powershell
-irm https://raw.githubusercontent.com/Madgod-xyz/antigravity-quota-monitor/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/mad-helpers/antigravity-quota-monitor/main/install.ps1 | iex
 ```
 
 ### macOS & Linux (Bash)
 Open your terminal and run:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Madgod-xyz/antigravity-quota-monitor/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mad-helpers/antigravity-quota-monitor/main/install.sh | bash
 ```
 
 ### Manual Installation (All Platforms)
 ```bash
-git clone https://github.com/Madgod-xyz/antigravity-quota-monitor.git
+git clone https://github.com/mad-helpers/antigravity-quota-monitor.git
 cd antigravity-quota-monitor
 
 # On Windows:
@@ -130,4 +130,4 @@ chmod +x install.sh
 
 ## 📄 License
 
-MIT License © 2026 [Madgod-xyz](https://github.com/Madgod-xyz)
+MIT License © 2026 [mad-helpers](https://github.com/mad-helpers) ([Madgod-xyz](https://github.com/Madgod-xyz) & [Bombhub-apk](https://github.com/Bombhub-apk))
