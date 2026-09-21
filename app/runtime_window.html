@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Antigravity Switcher & Migration Suite</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Ambient Liquid Glows -->
+  <div class="ambient-glow ambient-1"></div>
+  <div class="ambient-glow ambient-2"></div>
+
+  <div class="app-container">
+
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand-capsule">
+        <div class="logo-orb">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1 data-i18n="appName">Antigravity Switcher</h1>
+          <p data-i18n="appSubtitle">Multi-Account & Project Migration Suite</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <!-- Language Selector -->
+        <div class="lang-select-wrap">
+          <select id="langSelect" class="lang-select" onchange="changeLanguage(this.value)">
+            <option value="en">🇺🇸 EN</option>
+            <option value="fa">🇮🇷 فارسی</option>
+            <option value="zh">🇨🇳 中文</option>
+            <option value="es">🇪🇸 ES</option>
+          </select>
+          <span class="lang-chevron">▾</span>
+        </div>
+
+        <button class="btn btn-glass" onclick="logoutAndAddNew()" style="padding: 7px 12px; font-size: 12px;">
+          <span>➕</span>
+          <span data-i18n="addNewAccount">Add Account</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Hero: Active Account Card -->
+    <section class="liquid-card active-card">
+      <div class="active-card-top">
+        <div class="user-profile">
+          <div class="avatar-frame">
+            <img id="userAvatar" class="avatar-img" src="" alt="Avatar" style="display:none;" />
+            <div id="userAvatarPlaceholder" class="avatar-placeholder">A</div>
+            <div class="pulse-dot" title="Active Session"></div>
+          </div>
+          <div class="user-meta">
+            <h2>
+              <span id="userName">Active Session</span>
+              <span id="tierBadge" class="tier-badge pro">PRO</span>
+            </h2>
+            <p id="userEmail">Loading session...</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Quota Gauge -->
+      <div class="quota-box">
+        <div class="quota-box-header">
+          <span class="quota-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+            <span data-i18n="activeAccount">Active Quota</span>
+          </span>
+          <span id="quotaCountdown" class="quota-countdown">⏱ Resets in --</span>
+        </div>
+
+        <div class="liquid-progress-track">
+          <div id="quotaProgressFill" class="liquid-progress-fill" style="width: 0%;"></div>
+        </div>
+
+        <div class="quota-box-footer">
+          <span id="quotaUsedText">0% used</span>
+          <span id="quotaRemainingText">100% remaining</span>
+        </div>
+      </div>
+
+      <!-- Models Breakdown -->
+      <div class="models-grid" id="modelsGrid">
+        <!-- Injected via JavaScript -->
+      </div>
+
+      <!-- Hero Actions -->
+      <div class="btn-group-hero">
+        <button class="btn btn-primary" onclick="saveCurrentAccount()" style="flex:1;">
+          <span>💾</span>
+          <span data-i18n="saveCurrent">Save Current Account</span>
+        </button>
+        <button class="btn btn-glass" onclick="refreshLiveData()">
+          <span>🔄</span>
+          <span data-i18n="refreshQuota">Refresh</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Saved Accounts Section -->
+    <section>
+      <div class="section-head">
+        <h3 data-i18n="savedAccounts">Saved Accounts</h3>
+        <span id="accountsCountBadge" class="tier-badge free">0</span>
+      </div>
+
+      <div class="accounts-list" id="savedAccountsList">
+        <!-- Dynamically injected account cards -->
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <div>
+        <span data-i18n="author">Developed with precision by</span>
+        <a href="https://github.com/Madgod-xyz" target="_blank">Madgod-xyz</a>
+      </div>
+      <a href="https://github.com/Madgod-xyz/antigravity-account-switcher" target="_blank" data-i18n="githubNotice" style="font-size:11px; opacity:0.75;">
+        ★ Star on GitHub
+      </a>
+    </footer>
+
+  </div>
+
+  <!-- Project & Chat Migration Modal (iOS Liquid Sheet) -->
+  <div class="modal-overlay" id="migrationModal">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div>
+          <h2 data-i18n="migrateTitle">Project & Chat Migration Hub</h2>
+          <p data-i18n="migrateSubtitle" style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+            Transfer or clone agent conversations and brainstorm artifacts between accounts
+          </p>
+        </div>
+        <button class="modal-close-btn" onclick="closeMigrationModal()">✕</button>
+      </div>
+
+      <div class="modal-body">
+
+        <!-- Target Account Selection -->
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <label data-i18n="targetAccount" style="font-size:13px; font-weight:700;">Target Account</label>
+          <select id="modalTargetAccountSelect" class="lang-select" style="width:100%; border-radius:var(--radius-md); padding:10px 14px;">
+            <!-- Populated dynamically -->
+          </select>
+        </div>
+
+        <!-- Transfer Mode -->
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <label data-i18n="migrationMode" style="font-size:13px; font-weight:700;">Transfer Mode</label>
+          <div class="option-row">
+            <div class="radio-card selected" id="modeCopyCard" onclick="selectMigrationMode('copy')">
+              <span class="radio-card-title" data-i18n="modeCopy">Safe Copy (Keep in both)</span>
+              <span class="radio-card-desc" data-i18n="modeCopyDesc">Duplicates conversations and artifacts so you can continue work with new quota.</span>
+            </div>
+            <div class="radio-card" id="modeCutCard" onclick="selectMigrationMode('move')">
+              <span class="radio-card-title" data-i18n="modeCut">Cut & Move (Transfer)</span>
+              <span class="radio-card-desc" data-i18n="modeCutDesc">Moves projects completely to target account, cleaning up source.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Destination Structure -->
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <label data-i18n="structureMode" style="font-size:13px; font-weight:700;">Destination Layout</label>
+          <div class="option-row">
+            <div class="radio-card selected" id="structSeparateCard" onclick="selectStructureMode('separate')">
+              <span class="radio-card-title" data-i18n="structSeparate">Separate Pages & Projects</span>
+              <span class="radio-card-desc" data-i18n="structSeparateDesc">Keeps each conversation thread as an independent project.</span>
+            </div>
+            <div class="radio-card" id="structMergeCard" onclick="selectStructureMode('merge')">
+              <span class="radio-card-title" data-i18n="structMerge">Merge into Single Project</span>
+              <span class="radio-card-desc" data-i18n="structMergeDesc">Consolidates all selected conversations into a single timeline.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Continuous Dual-Sync Toggle -->
+        <div class="sync-toggle-card">
+          <div style="display:flex; flex-direction:column; gap:3px;">
+            <span class="radio-card-title" data-i18n="dualSyncTitle">Continuous Dual-Sync</span>
+            <span class="radio-card-desc" data-i18n="dualSyncDesc">Keep AI agent updates synchronized automatically across both accounts.</span>
+          </div>
+          <label class="ios-switch">
+            <input type="checkbox" id="dualSyncCheckbox">
+            <span class="ios-slider"></span>
+          </label>
+        </div>
+
+        <!-- Conversation Picker -->
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <label data-i18n="selectConversations" style="font-size:13px; font-weight:700;">Select Conversations</label>
+            <div style="display:flex; gap:8px;">
+              <button class="btn-glass" onclick="toggleSelectAllConversations(true)" style="padding:4px 8px; font-size:11px;" data-i18n="selectAll">Select All</button>
+              <button class="btn-glass" onclick="toggleSelectAllConversations(false)" style="padding:4px 8px; font-size:11px;" data-i18n="deselectAll">Deselect</button>
+            </div>
+          </div>
+          <input type="text" id="convSearchInput" class="lang-select" style="width:100%; border-radius:var(--radius-sm); padding:8px 12px; margin-bottom:4px;" placeholder="Search conversations or projects..." oninput="filterConversations(this.value)" />
+
+          <div class="conv-picker" id="conversationPickerList">
+            <!-- Populated dynamically with checkboxes -->
+          </div>
+        </div>
+
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-glass" onclick="closeMigrationModal()" data-i18n="cancel">Cancel</button>
+        <button class="btn btn-primary" id="startMigrationBtn" onclick="executeMigration()">
+          <span>🚀</span>
+          <span data-i18n="startMigration">Start Smart Migration</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+window.INITIAL_PAYLOAD = { activeAccount: {
+  "email": "madgod.cum@gmail.com",
+  "name": "Madgod",
+  "avatar": "https://lh3.googleusercontent.com/a/ACg8ocKL_c03MxCossmd802Ci3aMxOH1oka7dLjgyC_xM0FnDA48xlA=s96-c",
+  "tier": "Google AI Pro",
+  "tier_code": "pro",
+  "session": {
+    "name": "Gemini 3.8 Flash High",
+    "used_pct": 47.0,
+    "remaining_pct": 53.0,
+    "resets_in": "28 min",
+    "reset_time": "07:27 PM",
+    "reset_secs": 1722,
+    "reset_iso": "2026-09-10T15:57:38Z"
+  },
+  "pools": [
+    {
+      "name": "Gemini 3.8 Flash High",
+      "used_pct": 47.0,
+      "remaining_pct": 53.0,
+      "resets_in": "28 min",
+      "reset_time": "07:27 PM",
+      "reset_secs": 1722,
+      "reset_iso": "2026-09-10T15:57:38Z"
+    },
+    {
+      "name": "Gemini 3.1 Pro",
+      "used_pct": 47.0,
+      "remaining_pct": 53.0,
+      "resets_in": "28 min",
+      "reset_time": "07:27 PM",
+      "reset_secs": 1722,
+      "reset_iso": "2026-09-10T15:57:38Z"
+    },
+    {
+      "name": "Claude Sonnet 4.6",
+      "used_pct": 0.0,
+      "remaining_pct": 100,
+      "resets_in": "4 hr 59 min",
+      "reset_time": "11:58 PM",
+      "reset_secs": 17989,
+      "reset_iso": "2026-09-10T20:28:45Z"
+    },
+    {
+      "name": "GPT-OSS 120B",
+      "used_pct": 0.0,
+      "remaining_pct": 100,
+      "resets_in": "4 hr 59 min",
+      "reset_time": "11:58 PM",
+      "reset_secs": 17989,
+      "reset_iso": "2026-09-10T20:28:45Z"
+    }
+  ]
+}, savedAccounts: {
+    "madgod.cum@gmail.com":  {
+                                 "label":  "madgod.cum@gmail.com",
+                                 "email":  "madgod.cum@gmail.com",
+                                 "tier":  "Google AI Pro",
+                                 "tier_code":  "pro",
+                                 "remaining_pct":  62.0,
+                                 "token_file":  "C:\\Users\\gerap\\.gemini\\accounts\\madgod.cum@gmail.com.token",
+                                 "saved_at":  "2026-09-10 18:39:56"
+                             }
+} };
+window.INITIAL_CONVERSATIONS = [
+  {
+    "id": "ceadd078-8357-4148-8f8a-6a74b45be8f4",
+    "title": "╪ذ╪│█î╪د╪▒ ╪«╪ذ ┘╛╪▒┘ê┌ء┘ç ╪▒┘ê ┌ر╪د┘à┘ ┘à╪╖╪د┘╪╣┘ç ┘ê ╪ذ╪▒╪▒╪│█î ┌ر┘ ┘╪د█î┘ ┘ç┘╪»╪ت┘ ┘ç┘à ╪»╪د╪▒█î┘à ┌ر┘ç ┌ر╪د┘à┘ ┘à╪ز┘ê╪ش┘ç ...",
+    "last_modified": "2026-09-10 18:58",
+    "timestamp": 1789054111.8825133,
+    "size_kb": 40680.0,
+    "has_brain": true
+  },
+  {
+    "id": "757ccce5-e2a0-409f-bcb7-0271ec5a39ec",
+    "title": "https://github.com/m4tinbeigi-official/antigravity-account-switcher",
+    "last_modified": "2026-09-10 18:57",
+    "timestamp": 1789054063.9752634,
+    "size_kb": 4428.0,
+    "has_brain": true
+  },
+  {
+    "id": "a27616fb-42b0-4608-92bf-ffbb99a74c79",
+    "title": "╪د┌»┘ç ╪د╪▓ ╪╖╪▒█î┘é ┌»┘ê╪┤█î ┘à┘ê╪ذ╪ز╪د█î┘┘à ┌ر┘ç ╪ذ╪╡┘ê╪▒╪ز ╪▒█î┘à┘ê╪ز ┌ر┘╪ز╪▒┘╪ز ┌ر┘┘à ┘ê ╪»╪│╪ز┘ê╪▒ ╪ذ╪»┘à ╪د█î┘ ╪│█î╪│╪ز┘à ╪▒...",
+    "last_modified": "2026-09-10 18:29",
+    "timestamp": 1789052363.905552,
+    "size_kb": 284.0,
+    "has_brain": true
+  },
+  {
+    "id": "0aaa7388-ad4a-44c6-b53d-36f9bb42d7a5",
+    "title": "╪«╪ذ ╪ذ╪ذ█î┘ ╪ز┘ê ┘ç┘à █î┌ر ╪د█î╪ش┘╪ز ┘ç┘ê╪┤ ┘à╪╡┘┘ê╪╣█î ┘ç╪│╪ز█î ┘ê ┌ر╪د╪▒╪ز ┘é╪▒╪د╪▒┘ç ╪د█î┘ ╪ذ╪د╪┤┘ç ╪ذ╪╣┘┘ê╪د┘ █î┘ç ┘à╪│╪خ┘ê...",
+    "last_modified": "2026-09-10 15:06",
+    "timestamp": 1789040182.9145477,
+    "size_kb": 8092.0,
+    "has_brain": true
+  },
+  {
+    "id": "d97e15af-75ee-49ba-a88e-609c5fe45ad7",
+    "title": "╪«╪ذ ╪ذ╪ذ█î┘ ╪ز┘ê █î┌ر ╪د█î╪ش┘╪ز ┘ç┘ê╪┤ ┘à╪╡┘┘ê╪╣█î ┘ç╪│╪ز█î ┌ر┘ç ┘é╪▒╪د╪▒┘ç ┘ç╪▒ ╪▒┘ê╪▓ ┘à╪ص╪╡┘ê┘╪د╪ز ┘ê ┘à╪ص╪ز┘ê█î╪د╪ز ╪│╪خ┘ê╪î ...",
+    "last_modified": "2026-09-10 15:01",
+    "timestamp": 1789039867.3907633,
+    "size_kb": 6152.0,
+    "has_brain": true
+  },
+  {
+    "id": "b6fbe583-446f-4cb6-809d-604d411436e0",
+    "title": "Search and investigate Google Gemini API documentation, free tier limits (R...",
+    "last_modified": "2026-09-10 13:47",
+    "timestamp": 1789035451.147045,
+    "size_kb": 172.0,
+    "has_brain": true
+  },
+  {
+    "id": "8a21b63e-63a1-441a-8ce1-bee50e886ac8",
+    "title": "╪ذ╪ذ█î┘ ┘à╪د █î┘ç ╪│╪د█î╪ز ┘ê╪▒╪»┘╛╪▒╪│█î ╪»╪د╪▒█î┘à",
+    "last_modified": "2026-09-09 17:48",
+    "timestamp": 1788963539.3009906,
+    "size_kb": 21900.0,
+    "has_brain": true
+  },
+  {
+    "id": "7edb9750-4840-4fff-bfcd-542a4f656f2a",
+    "title": "╪د┘╪▓┘ê┘┘ç ╪د█î ┌ر┘ç ╪ذ╪▒╪د█î ┌»┘ê┌»┘ ┌»╪▒┘ê█î╪ز█î ╪│╪د╪«╪ز█î┘à ╪▒┘ê ┘à█î╪»┘ê┘█î ╪ز╪د ┌ر╪ش╪د ┘╛█î╪┤ ╪▒┘╪ز█î┘à╪ا",
+    "last_modified": "2026-09-09 15:54",
+    "timestamp": 1788956694.2686129,
+    "size_kb": 1168.0,
+    "has_brain": true
+  },
+  {
+    "id": "033ff8eb-2d06-40a0-afa6-b98290ba9e6c",
+    "title": "█î┘ç ┘┘ê┘╪»╪▒ ╪ش╪»█î╪» ╪ذ╪│╪د╪▓ ╪د╪│┘à╪┤┘à ╪ذ╪▓╪د╪▒ samansa SEO Agent",
+    "last_modified": "2026-09-09 15:49",
+    "timestamp": 1788956394.2758017,
+    "size_kb": 1048.0,
+    "has_brain": true
+  },
+  {
+    "id": "318b5ba9-8040-41d9-b407-d7eb5f0b97a3",
+    "title": "┘╛╪▒┘ê┌ء┘ç Antigravity Quota Monitor",
+    "last_modified": "2026-09-09 15:46",
+    "timestamp": 1788956186.2775621,
+    "size_kb": 26592.0,
+    "has_brain": true
+  },
+  {
+    "id": "2a7b4d65-0ec9-4efa-a998-208ef4211e61",
+    "title": "SAMANSA ظ¤ GEMINI 3.8 FLASH HANDOFF",
+    "last_modified": "2026-09-09 00:57",
+    "timestamp": 1788902854.5805142,
+    "size_kb": 22732.0,
+    "has_brain": true
+  },
+  {
+    "id": "300ca6a2-2ae9-4578-b69a-b1561e8e10d6",
+    "title": "╪ذ╪ذ█î┘ ╪د█î┘ ╪▒╪ذ╪د╪ز ╪ز┘┌»╪▒╪د┘à█î ┘à╪د╪│╪ز ┌ر┘ç ╪ز┘ê╪┤ ┘é█î┘à╪ز ┘ç╪د█î ┌ر╪د┘╪د┘ ╪ز┘┌»╪▒╪د┘à┘à┘ê┘ ╪د┘╛╪»█î╪ز ┘à█î╪┤┘ç ╪ص╪د┘╪د ...",
+    "last_modified": "2026-09-08 18:38",
+    "timestamp": 1788880113.291441,
+    "size_kb": 9356.0,
+    "has_brain": true
+  },
+  {
+    "id": "02dec554-eccc-459d-97ac-7d2fab30d3ca",
+    "title": "┘à█î╪ز┘ê┘█î ┌ر╪▒┘ê┘à ┘à┘ ╪▒┘ê ╪ذ╪د╪▓ ┌ر┘█î ┘ê ╪ز┘ê ╪│╪د█î╪ز╪د█î█î ┌ر┘ç ┘à█î┌»┘à ╪ذ╪▒█î ┘ê ┘à╪╖╪ز╪د┘╪ذ┘ê ╪ذ╪«┘ê┘█î",
+    "last_modified": "2026-09-08 14:33",
+    "timestamp": 1788865391.2903016,
+    "size_kb": 712.0,
+    "has_brain": true
+  },
+  {
+    "id": "4c2ad50e-9233-4035-8523-5baa91d2a697",
+    "title": "Conversation-4c2ad50e",
+    "last_modified": "2026-09-07 12:48",
+    "timestamp": 1788772689.7188826,
+    "size_kb": 704.0,
+    "has_brain": true
+  },
+  {
+    "id": "7c0a145e-1d11-4ce6-ad11-842161ccd13c",
+    "title": "Conversation 7c0a145e",
+    "last_modified": "2026-09-06 15:14",
+    "timestamp": 1788695090.3210523,
+    "size_kb": 48.0,
+    "has_brain": true
+  },
+  {
+    "id": "c3fe1eee-949a-4382-a27b-9a4e248ca89a",
+    "title": "hi",
+    "last_modified": "2026-09-05 15:07",
+    "timestamp": 1788608275.6241326,
+    "size_kb": 372.0,
+    "has_brain": true
+  }
+];
+</script>
+  <!-- Scripts -->
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
+

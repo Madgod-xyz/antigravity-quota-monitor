@@ -8,10 +8,52 @@
   if (existingAccPill) existingAccPill.remove();
 
   if (window.__aqm_dom_interval) { clearInterval(window.__aqm_dom_interval); window.__aqm_dom_interval = null; }
+  if (window.__aqm_task_interval) { clearInterval(window.__aqm_task_interval); window.__aqm_task_interval = null; }
   if (window.__aqm_token_observer) { window.__aqm_token_observer.disconnect(); window.__aqm_token_observer = null; }
   if (window.__aqm_submenu_observer) { window.__aqm_submenu_observer.disconnect(); window.__aqm_submenu_observer = null; }
   if (window.__aqm_dom_observer) { window.__aqm_dom_observer.disconnect(); window.__aqm_dom_observer = null; }
   if (window.__aqm_rtl_interval) { clearInterval(window.__aqm_rtl_interval); window.__aqm_rtl_interval = null; }
+  // Clean up only our own tracked timers
+  if (Array.isArray(window.__aqm_timers)) {
+    window.__aqm_timers.forEach(id => { clearInterval(id); clearTimeout(id); });
+    window.__aqm_timers = [];
+  }
+  function safeAppendToHead(el) {
+    try {
+      const target = document.head || document.documentElement || document.body;
+      if (target) {
+        target.appendChild(el);
+      } else {
+        document.addEventListener('DOMContentLoaded', () => {
+          (document.head || document.documentElement || document.body)?.appendChild(el);
+        }, { once: true });
+      }
+    } catch(e) {}
+  }
+
+  // --- Core Multi-Instance / Multi-Account Helpers ---
+  function isAccount2(email) {
+    if (!email) return false;
+    const norm = String(email).toLowerCase().trim();
+    if (norm === 'instance_2' || norm === 'secondary_account' || norm.includes('account2')) return true;
+    // Any account other than madgod is an alternate/secondary account (e.g. bombhub, ali135)
+    return norm !== 'madgod.cum@gmail.com' && norm !== 'primary_account';
+  }
+
+  function isInstance2Window() {
+    if (window.__antigravity_instance === 'instance_2') return true;
+    if (window.__antigravity_instance === 'instance_1') return false;
+    try {
+      if (localStorage.getItem('antigravity:instance_id') === 'instance_2') return true;
+      if (localStorage.getItem('antigravity:instance_id') === 'instance_1') return false;
+    } catch(e) {}
+    if (window.__antigravity_accounts) {
+      if (window.__antigravity_accounts.instanceId === 'instance_2' || window.__antigravity_accounts.instance_id === 'instance_2') return true;
+      if (window.__antigravity_accounts.instanceId === 'instance_1' || window.__antigravity_accounts.instance_id === 'instance_1') return false;
+    }
+    return false;
+  }
+
 
   // Clean up any test style or standalone legacy RTL elements
   const testVazir = document.getElementById('aqm-test-vazir');
@@ -54,102 +96,15 @@
       link.id = sheet.id;
       link.rel = 'stylesheet';
       link.href = sheet.href;
-      document.head.appendChild(link);
+      safeAppendToHead(link);
     }
   });
-
-  // ==========================================
-  // Persistent Settings Engine (CDP IPC + Local File + LocalStorage)
-  // ==========================================
-  if (!window.__antigravity_settings) {
-    window.__antigravity_settings = {};
-  }
-
-  function getPersistedSetting(key, defaultValue = null) {
-    try {
-      if (window.__antigravity_settings && window.__antigravity_settings[key] !== undefined && window.__antigravity_settings[key] !== null) {
-        return window.__antigravity_settings[key];
-      }
-      const val = localStorage.getItem(key);
-      if (val !== null && val !== undefined) {
-        return val;
-      }
-    } catch (e) {}
-    return defaultValue;
-  }
-
-  function persistSetting(key, value) {
-    try {
-      if (value === null || value === undefined) {
-        localStorage.removeItem(key);
-      } else {
-        localStorage.setItem(key, (typeof value === 'object') ? JSON.stringify(value) : String(value));
-      }
-    } catch (e) {}
-
-    if (!window.__antigravity_settings) window.__antigravity_settings = {};
-    window.__antigravity_settings[key] = value;
-
-    // 1. Send via Native CDP IPC (zero-latency)
-    if (typeof window.__aqm_daemon_ipc === 'function') {
-      try {
-        window.__aqm_daemon_ipc(JSON.stringify({
-          action: 'save_setting',
-          key: key,
-          value: value
-        }));
-      } catch (e) {}
-    }
-
-    // 2. Send via Local HTTP Daemon API (failsafe persistence to ~/.gemini/antigravity/user_settings.json)
-    try {
-      fetch('http://127.0.0.1:39281/api/save_setting', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: key, value: value })
-      }).catch(() => {});
-    } catch (e) {}
-  }
-
-  // Preload settings from daemon in background as extra safety net
-  try {
-    fetch('http://127.0.0.1:39281/api/settings')
-      .then(res => res.json())
-      .then(savedSettings => {
-        if (savedSettings && typeof savedSettings === 'object') {
-          let hasDiff = false;
-          for (const [k, v] of Object.entries(savedSettings)) {
-            if (v !== undefined && v !== null) {
-              if (window.__antigravity_settings[k] !== v) {
-                window.__antigravity_settings[k] = v;
-                hasDiff = true;
-              }
-              try {
-                localStorage.setItem(k, (typeof v === 'object') ? JSON.stringify(v) : String(v));
-              } catch (e) {}
-            }
-          }
-          if (hasDiff && typeof initSettingsFromStore === 'function') {
-            initSettingsFromStore();
-            if (typeof getActiveTheme === 'function' && typeof applyAppWorkspaceTheme === 'function') {
-              applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
-            }
-            if (typeof applyRtlStyles === 'function') applyRtlStyles();
-            if (typeof renderBadge === 'function') renderBadge();
-            if (typeof renderPopover === 'function') renderPopover();
-          }
-        }
-      })
-      .catch(() => {});
-  } catch (e) {}
 
   // Custom user-imported fonts registry
   let customImportedFonts = [];
   try {
-    const savedImported = getPersistedSetting('antigravity:custom_imported_fonts');
-    if (savedImported) {
-      customImportedFonts = (typeof savedImported === 'string') ? JSON.parse(savedImported) : savedImported;
-    }
+    const savedImported = localStorage.getItem('antigravity:custom_imported_fonts');
+    if (savedImported) customImportedFonts = JSON.parse(savedImported) || [];
   } catch (e) {}
 
   function injectImportedFontStyles() {
@@ -161,7 +116,7 @@
           link.id = id;
           link.rel = 'stylesheet';
           link.href = f.url.trim();
-          document.head.appendChild(link);
+          safeAppendToHead(link);
         }
       }
     });
@@ -183,7 +138,7 @@
   if (!style) {
     style = document.createElement('style');
     style.id = 'aqm-styles';
-    document.head.appendChild(style);
+    safeAppendToHead(style);
   }
   style.textContent = `
       @keyframes aqm-pulse-dot {
@@ -366,7 +321,7 @@
   if (!swStyleTag) {
     swStyleTag = document.createElement('style');
     swStyleTag.id = 'aqm-switcher-styles';
-    document.head.appendChild(swStyleTag);
+    safeAppendToHead(swStyleTag);
   }
   swStyleTag.textContent = `
     .aqm-switcher-modal {
@@ -751,64 +706,60 @@
     }
   };
 
+  const userSettings = (typeof window !== 'undefined' && window.__antigravity_user_settings) || {};
+
   let currentThemeId = 'cyber';
-  let isFullAppThemingEnabled = true;
-  let customFontEn = 'default';
-  let customFontFa = 'default';
-
-  function initSettingsFromStore() {
+  if (userSettings.theme && THEMES[userSettings.theme]) {
+    currentThemeId = userSettings.theme;
+  } else {
     try {
-      const savedTheme = getPersistedSetting('antigravity:quota_theme');
+      const savedTheme = localStorage.getItem('antigravity:quota_theme');
       if (savedTheme && THEMES[savedTheme]) currentThemeId = savedTheme;
-    } catch (e) {}
-
-    try {
-      const savedAppTheming = getPersistedSetting('antigravity:full_app_theming');
-      if (savedAppTheming !== null && savedAppTheming !== undefined) {
-        isFullAppThemingEnabled = (savedAppTheming === true || savedAppTheming === 'true');
-      }
-    } catch (e) {}
-
-    try {
-      const savedEn = getPersistedSetting('antigravity:custom_font_en');
-      if (savedEn) customFontEn = savedEn;
-    } catch (e) {}
-
-    try {
-      const savedFa = getPersistedSetting('antigravity:custom_font_fa');
-      if (savedFa) customFontFa = savedFa;
-    } catch (e) {}
-
-    try {
-      const savedImported = getPersistedSetting('antigravity:custom_imported_fonts');
-      if (savedImported) {
-        customImportedFonts = (typeof savedImported === 'string') ? JSON.parse(savedImported) : savedImported;
-        injectImportedFontStyles();
-      }
-    } catch (e) {}
-
-    try {
-      const savedRtl = getPersistedSetting('antigravity:rtl_config');
-      if (savedRtl && typeof rtlConfig !== 'undefined') {
-        const parsed = (typeof savedRtl === 'string') ? JSON.parse(savedRtl) : savedRtl;
-        rtlConfig = { ...rtlConfig, ...parsed };
-      }
-    } catch (e) {}
-
-    try {
-      const savedMode = getPersistedSetting('antigravity:quota_mode');
-      if (savedMode === 'remaining' || savedMode === 'used') displayMode = savedMode;
-    } catch (e) {}
-
-    try {
-      const savedPrivacy = getPersistedSetting('antigravity:privacy_mode');
-      if (savedPrivacy !== null && savedPrivacy !== undefined) {
-        isPrivacyMode = (savedPrivacy === true || savedPrivacy !== 'false');
-      }
     } catch (e) {}
   }
 
-  initSettingsFromStore();
+  let isFullAppThemingEnabled = true;
+  if (userSettings.fullTheming !== undefined) {
+    isFullAppThemingEnabled = Boolean(userSettings.fullTheming);
+  } else {
+    try {
+      const savedAppTheming = localStorage.getItem('antigravity:full_app_theming');
+      if (savedAppTheming !== null) isFullAppThemingEnabled = (savedAppTheming === 'true');
+    } catch (e) {}
+  }
+
+  let customFontEn = (userSettings.fontEn && userSettings.fontEn !== 'default') ? userSettings.fontEn : 'default';
+  if (customFontEn === 'default') {
+    try {
+      const savedEn = localStorage.getItem('antigravity:custom_font_en');
+      if (savedEn) customFontEn = savedEn;
+    } catch (e) {}
+  }
+
+  let customFontFa = (userSettings.fontFa && userSettings.fontFa !== 'default') ? userSettings.fontFa : 'default';
+  if (customFontFa === 'default') {
+    try {
+      const savedFa = localStorage.getItem('antigravity:custom_font_fa');
+      if (savedFa) customFontFa = savedFa;
+    } catch (e) {}
+  }
+
+  function persistUserSettings(patch) {
+    if (!patch || typeof patch !== 'object') return;
+    try {
+      window.__antigravity_user_settings = Object.assign({}, window.__antigravity_user_settings || {}, patch);
+    } catch(e) {}
+    try {
+      callDaemonIpc('save_user_settings', patch);
+    } catch(e) {}
+    try {
+      fetch('http://127.0.0.1:39281/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      }).catch(() => {});
+    } catch(e) {}
+  }
 
   let isImportFormOpen = false;
 
@@ -831,7 +782,7 @@
 
   function getActiveTheme() {
     try {
-      const savedTheme = getPersistedSetting('antigravity:quota_theme');
+      const savedTheme = localStorage.getItem('antigravity:quota_theme');
       if (savedTheme && THEMES[savedTheme]) currentThemeId = savedTheme;
     } catch (e) {}
     return THEMES[currentThemeId] || THEMES.cyber;
@@ -844,7 +795,7 @@
     if (!typoStyle) {
       typoStyle = document.createElement('style');
       typoStyle.id = 'aqm-typography-style';
-      document.head.appendChild(typoStyle);
+      safeAppendToHead(typoStyle);
     }
     typoStyle.textContent = `
       #antigravity-usage-popover {
@@ -869,7 +820,7 @@
     if (!style) {
       style = document.createElement('style');
       style.id = 'aqm-app-workspace-theme';
-      document.head.appendChild(style);
+      safeAppendToHead(style);
     }
 
     style.textContent = `
@@ -978,17 +929,20 @@
     fontSize: '16'
   };
   try {
-    const savedRtl = getPersistedSetting('antigravity:rtl_config');
-    if (savedRtl) {
-      const parsed = (typeof savedRtl === 'string') ? JSON.parse(savedRtl) : savedRtl;
-      rtlConfig = { ...rtlConfig, ...parsed };
+    if (userSettings.rtl) {
+      const parsedRtl = typeof userSettings.rtl === 'string' ? JSON.parse(userSettings.rtl) : userSettings.rtl;
+      rtlConfig = { ...rtlConfig, ...parsedRtl };
+    } else {
+      const savedRtl = localStorage.getItem('antigravity:rtl_config');
+      if (savedRtl) rtlConfig = { ...rtlConfig, ...JSON.parse(savedRtl) };
     }
   } catch (e) {}
 
   function saveRtlConfig() {
     try {
-      persistSetting('antigravity:rtl_config', rtlConfig);
+      localStorage.setItem('antigravity:rtl_config', JSON.stringify(rtlConfig));
     } catch (e) {}
+    persistUserSettings({ rtl: rtlConfig });
   }
 
   function applyRtlStyles() {
@@ -1000,7 +954,7 @@
     if (!rtlStyle) {
       rtlStyle = document.createElement('style');
       rtlStyle.id = 'aqm-rtl-engine-style';
-      document.head.appendChild(rtlStyle);
+      safeAppendToHead(rtlStyle);
     }
 
     const forceRtlRule = rtlConfig.forceRTL ? `
@@ -1159,19 +1113,21 @@
     }, { capture: true });
   }
 
-  let displayMode = 'remaining';
-  try {
-    const saved = getPersistedSetting('antigravity:quota_mode');
-    if (saved === 'remaining' || saved === 'used') displayMode = saved;
-  } catch (e) {}
+  let displayMode = userSettings.mode || 'remaining';
+  if (!userSettings.mode) {
+    try {
+      const saved = localStorage.getItem('antigravity:quota_mode');
+      if (saved === 'remaining' || saved === 'used') displayMode = saved;
+    } catch (e) {}
+  }
 
-  let isPrivacyMode = true;
-  try {
-    const savedPrivacy = getPersistedSetting('antigravity:privacy_mode');
-    if (savedPrivacy !== null && savedPrivacy !== undefined) {
-      isPrivacyMode = (savedPrivacy === true || savedPrivacy !== 'false');
-    }
-  } catch (e) {}
+  let isPrivacyMode = (userSettings.privacyMode !== undefined) ? Boolean(userSettings.privacyMode) : false;
+  if (userSettings.privacyMode === undefined) {
+    try {
+      const p = localStorage.getItem('antigravity:privacy_mode');
+      if (p !== null) isPrivacyMode = (p !== 'false');
+    } catch (e) {}
+  }
 
   let isDragging = false;
   let dragStartX = 0, dragStartY = 0;
@@ -1180,75 +1136,113 @@
   let isRefreshing = false;
   let activeTaskPollingInterval = null;
 
-  let currentUsage = {
-    email: "developer@antigravity.ai",
-    session: {
-      name: "Gemini (Pro & Flash)",
-      used_pct: 28.0,
-      remaining_pct: 72.0,
-      weekly_rem: 51.0,
-      weekly_pct: 49.0,
-      resets_in: "2 hr 4 min",
-      reset_time: "02:16 PM"
-    },
-    weekly: {
-      remaining_pct: 51.0,
-      used_pct: 49.0,
-      resets_in: "2 days, 19 hours"
-    },
-    pools: []
-  };
+  let currentUsage = (() => {
+    const isInst2 = (typeof window !== 'undefined' && window.__antigravity_instance === 'instance_2') || 
+                    (typeof localStorage !== 'undefined' && localStorage.getItem('antigravity:instance_id') === 'instance_2');
+    try {
+      // Priority 1: window.__antigravity_quota set by daemon (always fresh, most trusted)
+      if (window.__antigravity_quota && window.__antigravity_quota.session) {
+        // Always trust daemon-injected quota — it's set correctly per instance
+        return window.__antigravity_quota;
+      }
+      // Priority 2: localStorage keyed by instance-specific email
+      const instanceAccount = localStorage.getItem('antigravity:account_email');
+      if (instanceAccount) {
+        const emailKey = 'antigravity:active_quota:' + instanceAccount;
+        const itemByEmail = localStorage.getItem(emailKey);
+        if (itemByEmail) {
+          const parsed = JSON.parse(itemByEmail);
+          if (parsed && parsed.session) return parsed;
+        }
+      }
+      // Priority 3: generic localStorage — only if email matches this instance
+      const item = localStorage.getItem('antigravity:active_quota');
+      if (item) {
+        const parsed = JSON.parse(item);
+        if (parsed && parsed.session) {
+          const qEmail = parsed.email;
+          const assignedEmail = localStorage.getItem('antigravity:account_email') || window.__antigravity_account || '';
+          if (!assignedEmail || !qEmail || qEmail.toLowerCase() === assignedEmail.toLowerCase()) {
+            return parsed;
+          }
+        }
+      }
+    } catch (e) {}
+    // Fallback: use manifest to get correct email dynamically
+    let assignedEmail = '';
+    try {
+      assignedEmail = localStorage.getItem('antigravity:account_email') || window.__antigravity_account || '';
+    } catch(e) {}
+    let fallbackEmail = assignedEmail || (isInst2 ? 'bombhub.apk@gmail.com' : 'madgod.cum@gmail.com');
+    let fallbackName = (assignedEmail ? (assignedEmail.split('@')[0].split('.')[0].charAt(0).toUpperCase() + assignedEmail.split('@')[0].split('.')[0].slice(1)) : (isInst2 ? 'Secondary' : 'Primary'));
+    let fallbackAvatar = '';
+    try {
+      const manifestStr = localStorage.getItem('antigravity:accounts_manifest');
+      if (manifestStr) {
+        const manifest = JSON.parse(manifestStr);
+        const keys = Object.keys(manifest || {});
+        if (assignedEmail && manifest[assignedEmail]) {
+          fallbackEmail = assignedEmail;
+          fallbackName = manifest[assignedEmail]?.name || assignedEmail;
+          fallbackAvatar = manifest[assignedEmail]?.avatar || '';
+        } else if (keys.length > 0) {
+          const matchKey = (isInst2 ? (keys.find(k => isAccount2(k)) || keys[1]) : keys[0]) || keys[0];
+          fallbackEmail = matchKey;
+          fallbackName = manifest[matchKey]?.name || matchKey;
+          fallbackAvatar = manifest[matchKey]?.avatar || '';
+        }
+      }
+    } catch(e) {}
+    return {
+      email: fallbackEmail,
+      name: fallbackName,
+      avatar: fallbackAvatar,
+      tier: "Google AI Pro",
+      tier_code: "pro",
+      session: {
+        name: "Gemini 3.8 Flash High",
+        used_pct: 0,
+        remaining_pct: 100,
+        weekly_rem: 100,
+        weekly_pct: 0,
+        resets_in: "loading...",
+        reset_time: ""
+      },
+      weekly: {
+        remaining_pct: 100,
+        used_pct: 0,
+        resets_in: "loading..."
+      },
+      pools: []
+    };
+  })();
 
   function getActiveModelName() {
     const trigger = document.querySelector('[data-testid="model-selector-trigger"]');
     if (!trigger) return 'Gemini 3.8 Flash High';
-    const firstSpan = trigger.querySelector('span');
-    const raw = firstSpan ? firstSpan.innerText : trigger.innerText.split('\n')[0];
-    return (raw || 'Gemini 3.8 Flash High').trim();
-  }
-
-  function getActiveModelPool(usage) {
-    if (!usage) return null;
-    const modelName = getActiveModelName().toLowerCase();
-    const pools = usage.pools || [];
-    if (pools.length === 0) return usage.session || null;
-
-    // 1. Check for specific model family match
-    if (modelName.includes('claude') || modelName.includes('sonnet') || modelName.includes('opus')) {
-      const match = pools.find(p => p.name && (p.name.toLowerCase().includes('claude') || p.name.toLowerCase().includes('sonnet')));
-      if (match) return match;
-    }
-    if (modelName.includes('gpt') || modelName.includes('oss')) {
-      const match = pools.find(p => p.name && (p.name.toLowerCase().includes('gpt') || p.name.toLowerCase().includes('oss')));
-      if (match) return match;
-    }
-    if (modelName.includes('pro')) {
-      const match = pools.find(p => p.name && p.name.toLowerCase().includes('pro'));
-      if (match) return match;
-    }
-    if (modelName.includes('flash')) {
-      // Check if low/lite or high
-      const match = pools.find(p => p.name && p.name.toLowerCase().includes('flash'));
-      if (match) return match;
-    }
-
-    // 2. Direct name includes match
-    const directMatch = pools.find(p => p.name && (modelName.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(modelName)));
-    if (directMatch) return directMatch;
-
-    return usage.session || pools[0];
+    const firstLine = trigger.innerText.split('\n')[0].trim();
+    return firstLine || 'Gemini 3.8 Flash High';
   }
 
   async function fetchStoredQuota() {
     try {
+      const assignedEmail = localStorage.getItem('antigravity:account_email') || window.__antigravity_account || '';
       if (window.__antigravity_quota && window.__antigravity_quota.session) {
-        currentUsage = { ...currentUsage, ...window.__antigravity_quota };
-        return;
+        const qEmail = window.__antigravity_quota.email;
+        if (!assignedEmail || !qEmail || qEmail.toLowerCase() === assignedEmail.toLowerCase()) {
+          currentUsage = { ...currentUsage, ...window.__antigravity_quota };
+          return;
+        }
       }
       const item = localStorage.getItem('antigravity:active_quota');
       if (item) {
         const parsed = JSON.parse(item);
-        if (parsed && parsed.session) currentUsage = { ...currentUsage, ...parsed };
+        if (parsed && parsed.session) {
+          const qEmail = parsed.email;
+          if (!assignedEmail || !qEmail || qEmail.toLowerCase() === assignedEmail.toLowerCase()) {
+            currentUsage = { ...currentUsage, ...parsed };
+          }
+        }
       }
     } catch (e) {}
   }
@@ -1367,29 +1361,68 @@
     if (pop && pop.style.display !== 'none' && !pop.matches(':hover')) renderPopover();
 
     try {
-      const liveData = await fetchLiveQuotaFromCloudCode();
-      if (liveData && liveData.session) {
-        currentUsage = { ...currentUsage, ...liveData };
-        window.__antigravity_quota = currentUsage;
-        try {
-          const s = safeJsonStringify(currentUsage);
-          if (s) localStorage.setItem('antigravity:active_quota', s);
-        } catch (e) {}
-      } else {
-        const res = await fetch('http://127.0.0.1:39281/sync');
+      // Always fetch from daemon first (most reliable, per-instance)
+      const instParam = isInstance2Window() ? 'instance_2' : 'instance_1';
+      let daemonData = null;
+      try {
+        const res = await fetch(`http://127.0.0.1:39281/sync?instance=${instParam}`);
         if (res.ok) {
           const data = await res.json();
           if (data && data.session) {
-            currentUsage = { ...currentUsage, ...data };
-            window.__antigravity_quota = currentUsage;
-            try {
-              const s = safeJsonStringify(currentUsage);
-              if (s) localStorage.setItem('antigravity:active_quota', s);
-            } catch (e) {}
+            const isInst2 = isInstance2Window();
+            // Only accept data that matches this instance
+            const dataEmail = (data.email || '').toLowerCase();
+            const currentEmail = (currentUsage.email || '').toLowerCase();
+            // Accept if: no email mismatch, or email matches current instance's account
+            const assignedEmail = (localStorage.getItem('antigravity:account_email') || window.__antigravity_account || '').toLowerCase();
+            const emailOk = !assignedEmail || !dataEmail || (dataEmail === assignedEmail);
+            if (emailOk) {
+              daemonData = data;
+            }
           }
         }
+      } catch(e) {}
+
+      if (daemonData) {
+        currentUsage = {
+          ...currentUsage,
+          ...daemonData,
+          session: daemonData.session,
+          weekly: daemonData.weekly || currentUsage.weekly,
+          pools: daemonData.pools || currentUsage.pools || []
+        };
+        window.__antigravity_quota = currentUsage;
+        try {
+          const s = safeJsonStringify(currentUsage);
+          if (s) {
+            localStorage.setItem('antigravity:active_quota', s);
+            if (currentUsage.email) localStorage.setItem('antigravity:active_quota:' + currentUsage.email, s);
+          }
+        } catch (e) {}
+      } else {
+        // Fallback: try live cloud code (less reliable due to shared credential store)
+        const liveData = await fetchLiveQuotaFromCloudCode();
+        if (liveData && liveData.session) {
+          // Preserve identity from currentUsage, only update quota numbers
+          currentUsage = {
+            ...currentUsage,
+            session: liveData.session,
+            weekly: liveData.weekly || currentUsage.weekly,
+            pools: liveData.pools || currentUsage.pools || []
+          };
+          window.__antigravity_quota = currentUsage;
+          try {
+            const s = safeJsonStringify(currentUsage);
+            if (s) {
+              localStorage.setItem('antigravity:active_quota', s);
+              if (currentUsage.email) localStorage.setItem('antigravity:active_quota:' + currentUsage.email, s);
+            }
+          } catch (e) {}
+        }
       }
-    } catch (e) {} finally {
+    } catch (e) {
+      console.warn('[AQM] refreshQuota error:', e);
+    } finally {
       isRefreshing = false;
       renderBadge();
       const p = document.getElementById('antigravity-usage-popover');
@@ -1512,8 +1545,7 @@
 
     let customPos = null;
     try {
-      const p = getPersistedSetting('antigravity:popover_pos');
-      customPos = (typeof p === 'string') ? JSON.parse(p) : p;
+      customPos = JSON.parse(localStorage.getItem('antigravity:popover_pos') || 'null');
     } catch (e) {}
 
     const anchor = document.getElementById('antigravity-usage-pill') || trigger;
@@ -1552,16 +1584,19 @@
     pop.style.overflow = 'visible';
 
     try {
-      const p = getPersistedSetting('antigravity:privacy_mode');
-      if (p !== null && p !== undefined) isPrivacyMode = (p === true || p !== 'false');
+      const p = localStorage.getItem('antigravity:privacy_mode');
+      if (p !== null) isPrivacyMode = (p !== 'false');
     } catch (e) {}
 
     const isRem = (displayMode === 'remaining');
-    const sessUsed = Math.round(currentUsage.session?.used_pct ?? 28);
-    const sessRem = Math.round(currentUsage.session?.remaining_pct ?? (100 - sessUsed));
-    const sessReset = currentUsage.session?.resets_in || '2 hr 4 min';
-    const sessResetTime = currentUsage.session?.reset_time || '02:16 PM';
-    const email = currentUsage.email || 'developer@antigravity.ai';
+    const sessRem = Math.round(currentUsage.session?.remaining_pct ?? (100 - Math.round(currentUsage.session?.used_pct ?? 0)));
+    const sessUsed = Math.round(currentUsage.session?.used_pct ?? (100 - sessRem));
+    const sessReset = currentUsage.session?.resets_in || 'Ready';
+    const sessResetTime = currentUsage.session?.reset_time || '';
+    let email = currentUsage.email || window.__antigravity_account || localStorage.getItem('antigravity:account_email') || '';
+    if (email === 'developer@antigravity.ai' || !email) {
+      email = window.__antigravity_account || localStorage.getItem('antigravity:account_email') || 'user@example.com';
+    }
     const displayEmail = isPrivacyMode ? '••••••••••••@gmail.com' : email;
 
     const mainPct = isRem ? sessRem : sessUsed;
@@ -1569,8 +1604,8 @@
     const mainLabel = isRem ? 'مانده' : 'مصرف';
     const subLabel = isRem ? 'مصرف' : 'مانده';
 
-    const weeklyUsed = Math.round(currentUsage.weekly?.used_pct ?? 49);
-    const weeklyRem = Math.round(currentUsage.weekly?.remaining_pct ?? (100 - weeklyUsed));
+    const weeklyRem = Math.round(currentUsage.weekly?.remaining_pct ?? (100 - Math.round(currentUsage.weekly?.used_pct ?? 0)));
+    const weeklyUsed = Math.round(currentUsage.weekly?.used_pct ?? (100 - weeklyRem));
     const weeklyShow = isRem ? weeklyRem : weeklyUsed;
 
     const activeModel = getActiveModelName();
@@ -1590,56 +1625,52 @@
     const claudeWeekUsed = claudeGptPool ? Math.round(claudeGptPool.weekly_pct) : 3;
     const claudeResets = claudeGptPool?.resets_in || '5h';
 
-    // ACCURATE MODEL NAMES & LIVE QUOTA POOLS
-    const flashPool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('flash'));
-    const proPool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('pro'));
-    const claudePool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('claude') || p.name?.toLowerCase().includes('sonnet'));
-    const gptPool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('gpt') || p.name?.toLowerCase().includes('oss'));
-
+    // ACCURATE MODEL NAMES DETECTED IN ANTIGRAVITY
+    // Gemini 3.8 Flash, Gemini 3.1 Pro, Claude Sonnet 4.6, GPT-OSS 120B
     const pools = [
       {
         id: 'gemini-flash',
         name: 'Gemini 3.8 Flash',
         svg: SVGS.gemini,
         isActive: activeModel.toLowerCase().includes('flash'),
-        used_pct: flashPool ? Math.round(flashPool.used_pct) : geminiSessUsed,
-        remaining_pct: flashPool ? Math.round(flashPool.remaining_pct) : geminiSessRem,
-        weekly_rem: flashPool?.weekly_rem !== undefined ? Math.round(flashPool.weekly_rem) : geminiWeekRem,
-        weekly_pct: flashPool?.weekly_pct !== undefined ? Math.round(flashPool.weekly_pct) : geminiWeekUsed,
-        resets_in: flashPool?.resets_in || geminiResets
+        used_pct: geminiSessUsed,
+        remaining_pct: geminiSessRem,
+        weekly_rem: geminiWeekRem,
+        weekly_pct: geminiWeekUsed,
+        resets_in: geminiResets
       },
       {
         id: 'gemini-pro',
         name: 'Gemini 3.1 Pro',
         svg: SVGS.gemini,
         isActive: activeModel.toLowerCase().includes('3.1') || (activeModel.toLowerCase().includes('pro') && !activeModel.toLowerCase().includes('flash')),
-        used_pct: proPool ? Math.round(proPool.used_pct) : geminiSessUsed,
-        remaining_pct: proPool ? Math.round(proPool.remaining_pct) : geminiSessRem,
-        weekly_rem: proPool?.weekly_rem !== undefined ? Math.round(proPool.weekly_rem) : geminiWeekRem,
-        weekly_pct: proPool?.weekly_pct !== undefined ? Math.round(proPool.weekly_pct) : geminiWeekUsed,
-        resets_in: proPool?.resets_in || geminiResets
+        used_pct: geminiSessUsed,
+        remaining_pct: geminiSessRem,
+        weekly_rem: geminiWeekRem,
+        weekly_pct: geminiWeekUsed,
+        resets_in: geminiResets
       },
       {
         id: 'claude',
         name: 'Claude Sonnet 4.6',
         svg: SVGS.claude,
-        isActive: activeModel.toLowerCase().includes('claude') || activeModel.toLowerCase().includes('sonnet'),
-        used_pct: claudePool ? Math.round(claudePool.used_pct) : claudeSessUsed,
-        remaining_pct: claudePool ? Math.round(claudePool.remaining_pct) : claudeSessRem,
-        weekly_rem: claudePool?.weekly_rem !== undefined ? Math.round(claudePool.weekly_rem) : claudeWeekRem,
-        weekly_pct: claudePool?.weekly_pct !== undefined ? Math.round(claudePool.weekly_pct) : claudeWeekUsed,
-        resets_in: claudePool?.resets_in || claudeResets
+        isActive: activeModel.toLowerCase().includes('claude'),
+        used_pct: claudeSessUsed,
+        remaining_pct: claudeSessRem,
+        weekly_rem: claudeWeekRem,
+        weekly_pct: claudeWeekUsed,
+        resets_in: claudeResets
       },
       {
         id: 'gpt-oss',
         name: 'GPT-OSS 120B',
         svg: SVGS.gpt,
         isActive: activeModel.toLowerCase().includes('gpt') || activeModel.toLowerCase().includes('oss'),
-        used_pct: gptPool ? Math.round(gptPool.used_pct) : claudeSessUsed,
-        remaining_pct: gptPool ? Math.round(gptPool.remaining_pct) : claudeSessRem,
-        weekly_rem: gptPool?.weekly_rem !== undefined ? Math.round(gptPool.weekly_rem) : claudeWeekRem,
-        weekly_pct: gptPool?.weekly_pct !== undefined ? Math.round(gptPool.weekly_pct) : claudeWeekUsed,
-        resets_in: gptPool?.resets_in || claudeResets
+        used_pct: claudeSessUsed,
+        remaining_pct: claudeSessRem,
+        weekly_rem: claudeWeekRem,
+        weekly_pct: claudeWeekUsed,
+        resets_in: claudeResets
       },
       {
         id: 'others',
@@ -2003,7 +2034,7 @@
             <span style="font-weight:600;color:${theme.textColor};">سهمیه هفتگی:</span>
             <span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:${theme.chipColor};" data-font="mono" dir="ltr">${weeklyShow}%</span>
             <span>${mainLabel}</span>
-            <span style="opacity:0.5;">(${currentUsage.weekly?.resets_in || '2 days, 19 hours'})</span>
+            <span style="opacity:0.5;">(${currentUsage.weekly?.resets_in || 'Ready'})</span>
           </div>
           <div style="width:80px;height:3.5px;border-radius:9999px;background:rgba(255,255,255,0.08);overflow:hidden;">
             <div style="height:100%;width:${weeklyShow}%;background:${theme.accentSecondary || theme.accent};border-radius:9999px;"></div>
@@ -2108,7 +2139,10 @@
       privacyBtn.onclick = (e) => {
         e.stopPropagation();
         isPrivacyMode = !isPrivacyMode;
-        persistSetting('antigravity:privacy_mode', isPrivacyMode);
+        try {
+          localStorage.setItem('antigravity:privacy_mode', String(isPrivacyMode));
+        } catch (err) {}
+        persistUserSettings({ privacyMode: isPrivacyMode });
         renderPopover();
       };
     }
@@ -2116,7 +2150,8 @@
     pop.querySelector('#aqm-mode-rem-btn').onclick = (e) => {
       e.stopPropagation();
       displayMode = 'remaining';
-      persistSetting('antigravity:quota_mode', 'remaining');
+      try { localStorage.setItem('antigravity:quota_mode', 'remaining'); } catch (err) {}
+      persistUserSettings({ mode: 'remaining' });
       renderBadge();
       renderPopover();
     };
@@ -2124,7 +2159,8 @@
     pop.querySelector('#aqm-mode-used-btn').onclick = (e) => {
       e.stopPropagation();
       displayMode = 'used';
-      persistSetting('antigravity:quota_mode', 'used');
+      try { localStorage.setItem('antigravity:quota_mode', 'used'); } catch (err) {}
+      persistUserSettings({ mode: 'used' });
       renderBadge();
       renderPopover();
     };
@@ -2158,7 +2194,8 @@
         const tid = item.getAttribute('data-theme-id');
         if (THEMES[tid]) {
           currentThemeId = tid;
-          persistSetting('antigravity:quota_theme', tid);
+          try { localStorage.setItem('antigravity:quota_theme', tid); } catch (err) {}
+          persistUserSettings({ theme: tid });
           applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
           renderBadge();
           renderPopover();
@@ -2171,7 +2208,8 @@
         e.stopPropagation();
         const fn = btn.getAttribute('data-font-en');
         customFontEn = fn;
-        persistSetting('antigravity:custom_font_en', fn);
+        try { localStorage.setItem('antigravity:custom_font_en', fn); } catch (err) {}
+        persistUserSettings({ fontEn: fn });
         ensureFontLoaded(fn);
         applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
         renderBadge();
@@ -2184,7 +2222,8 @@
         e.stopPropagation();
         const fn = btn.getAttribute('data-font-fa');
         customFontFa = fn;
-        persistSetting('antigravity:custom_font_fa', fn);
+        try { localStorage.setItem('antigravity:custom_font_fa', fn); } catch (err) {}
+        persistUserSettings({ fontFa: fn });
         ensureFontLoaded(fn);
         applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
         renderBadge();
@@ -2225,7 +2264,7 @@
           return;
         }
         const rawUrl = importUrlInput ? importUrlInput.value.trim() : '';
-        const typeRadio = pop.querySelector('input[name="aqm-import-type"]:checked');
+        const typeRadio = pop.querySelector('input[name="aqm-font-type"]:checked');
         const fType = typeRadio ? typeRadio.value : 'fa';
 
         if (!customImportedFonts.some(f => f.id.toLowerCase() === rawName.toLowerCase())) {
@@ -2235,7 +2274,9 @@
             url: rawUrl,
             type: fType
           });
-          persistSetting('antigravity:custom_imported_fonts', customImportedFonts);
+          try {
+            localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(customImportedFonts));
+          } catch(err) {}
         }
 
         if (rawUrl) {
@@ -2244,11 +2285,17 @@
 
         if (fType === 'fa') {
           customFontFa = rawName;
-          persistSetting('antigravity:custom_font_fa', rawName);
+          try { localStorage.setItem('antigravity:custom_font_fa', rawName); } catch(err){}
         } else {
           customFontEn = rawName;
-          persistSetting('antigravity:custom_font_en', rawName);
+          try { localStorage.setItem('antigravity:custom_font_en', rawName); } catch(err){}
         }
+
+        persistUserSettings({
+          customImportedFonts,
+          fontEn: customFontEn,
+          fontFa: customFontFa
+        });
 
         ensureFontLoaded(rawName);
         applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
@@ -2263,16 +2310,24 @@
         e.stopPropagation();
         const fid = delBtn.getAttribute('data-delete-imported-font');
         customImportedFonts = customImportedFonts.filter(f => f.id !== fid);
-        persistSetting('antigravity:custom_imported_fonts', customImportedFonts);
+        try {
+          localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(customImportedFonts));
+        } catch(err) {}
 
         if (customFontFa === fid) {
           customFontFa = 'default';
-          persistSetting('antigravity:custom_font_fa', 'default');
+          try { localStorage.setItem('antigravity:custom_font_fa', 'default'); } catch(err){}
         }
         if (customFontEn === fid) {
           customFontEn = 'default';
-          persistSetting('antigravity:custom_font_en', 'default');
+          try { localStorage.setItem('antigravity:custom_font_en', 'default'); } catch(err){}
         }
+
+        persistUserSettings({
+          customImportedFonts,
+          fontEn: customFontEn,
+          fontFa: customFontFa
+        });
 
         applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
         renderBadge();
@@ -2284,7 +2339,8 @@
     fullAppToggleRow.onclick = (e) => {
       e.stopPropagation();
       isFullAppThemingEnabled = !isFullAppThemingEnabled;
-      persistSetting('antigravity:full_app_theming', isFullAppThemingEnabled);
+      try { localStorage.setItem('antigravity:full_app_theming', String(isFullAppThemingEnabled)); } catch (err) {}
+      persistUserSettings({ fullTheming: isFullAppThemingEnabled });
       applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
       renderBadge();
       renderPopover();
@@ -2390,10 +2446,11 @@
           dragHandle.style.cursor = 'grab';
 
           if (hasMoved) {
-            persistSetting('antigravity:popover_pos', {
-              left: pop.style.left,
-              top: pop.style.top
-            });
+            try {
+              const pos = { left: pop.style.left, top: pop.style.top };
+              localStorage.setItem('antigravity:popover_pos', JSON.stringify(pos));
+              persistUserSettings({ popoverPos: pos });
+            } catch (err) {}
           }
         }
 
@@ -2404,7 +2461,10 @@
       dragHandle.ondblclick = (e) => {
         if (e.target.closest('button') || e.target.closest('input')) return;
         e.stopPropagation();
-        persistSetting('antigravity:popover_pos', null);
+        try {
+          localStorage.removeItem('antigravity:popover_pos');
+          persistUserSettings({ popoverPos: null });
+        } catch (err) {}
         const anchor = document.getElementById('antigravity-usage-pill') || trigger;
         const rect = anchor.getBoundingClientRect();
         pop.style.left = Math.max(16, rect.left - 20) + 'px';
@@ -2471,6 +2531,28 @@
       migrationDone: "مهاجرت مکالمات با موفقیت انجام شد!",
       backupNotice: "پشتیبان ایمن در پوشه زیر ایجاد شد:",
       author: "توسعه داده شده با افتخار توسط Madgod-xyz",
+      tabProjects: "📁 پروژه‌ها",
+      tabTasks: "⏱ تسک‌ها",
+      projectsDesc: "انتخاب پروژه‌های مجاز برای اکانت ۲ (بمب هاب). پروژه‌های تیک‌نخورده در پنجره دوم باز نخواهند شد.",
+      tasksDesc: "مدیریت تسک‌های زمان‌بندی ویندوز. تسک‌های ایزوله‌شده توسط اکانت ۲ اجرا یا تغییر وضعیت داده نمی‌شوند.",
+      isolateTaskBtn: "🛡️ ایزوله از اکانت ۲",
+      unisolateTaskBtn: "🔓 اشتراک‌گذاری تسک",
+      taskIsolatedBadge: "🔒 فقط اکانت ۱",
+      taskSharedBadge: "🌐 مشترک دو اکانت",
+      taskEnabled: "فعال",
+      taskDisabled: "غیرفعال",
+      unlinkFromAcc2: "✕ جداسازی از اکانت ۲",
+      taskLockedBadge: "🔒 قفل شده در اکانت ۱",
+      taskLockedMsg: "این تسک متعلق به اکانت اصلی (مدگاد) است و از اکانت ۲ قابل تغییر نیست.",
+      syncNow: "🔄 سینک با اکانت ۲",
+      assignToAcc2: "مجاز در اکانت ۲ (بمب هاب)",
+      noProjectsFound: "هیچ پروژه‌ای یافت نشد.",
+      noTasksFound: "هیچ تسک زمان‌بندی مرتبطی یافت نشد.",
+      launchDual: "⚡️ پنجره ۲",
+      launchDualTitle: "اجرای همزمان در پنجره دوم آنتی‌گرویتی",
+      dualLaunching: "در حال اجرای پنجره دوم آنتی‌گرویتی...",
+      dualLaunched: "پنجره دوم با موفقیت اجرا شد!",
+      activeBadge: "فعال",
       pro: "پرو",
       ultra: "اولترا",
       free: "معمولی"
@@ -2479,7 +2561,9 @@
       appName: "Antigravity Switcher",
       appSubtitle: "Multi-Account & Project Migration Suite",
       tabAccounts: "👤 Accounts & Quota",
-      tabMigration: "⇄ Chat & Project Migration",
+      tabProjects: "📁 Projects",
+      tabTasks: "⏱ Scheduled Tasks",
+      tabMigration: "⇄ Chat Migration",
       activeAccount: "Active Account",
       saveCurrent: "💾 Save Current Account",
       savedAccounts: "Saved Accounts",
@@ -2507,6 +2591,28 @@
       migrationDone: "Migration completed successfully!",
       backupNotice: "Safe backup created at:",
       author: "Developed with precision by Madgod-xyz",
+      tabProjects: "📁 Projects",
+      tabTasks: "⏱ Scheduled Tasks",
+      projectsDesc: "Select projects accessible to Account 2. Unselected projects will not appear in Instance 2.",
+      tasksDesc: "Manage Windows scheduled tasks. Isolated tasks cannot be triggered or toggled by Account 2.",
+      isolateTaskBtn: "🛡️ Isolate from Account 2",
+      unisolateTaskBtn: "🔓 Share with Account 2",
+      taskIsolatedBadge: "🔒 Account 1 Only",
+      taskSharedBadge: "🌐 Shared",
+      taskEnabled: "Enabled",
+      taskDisabled: "Disabled",
+      unlinkFromAcc2: "✕ Unlink from Account 2",
+      taskLockedBadge: "🔒 Locked in Account 1",
+      taskLockedMsg: "This task belongs to Account 1 and is locked in Account 2.",
+      syncNow: "🔄 Sync with Account 2",
+      assignToAcc2: "Allow in Account 2",
+      noProjectsFound: "No projects found.",
+      noTasksFound: "No scheduled tasks found.",
+      launchDual: "⚡️ 2nd Window",
+      launchDualTitle: "Open concurrently in 2nd Antigravity Window",
+      dualLaunching: "Launching 2nd Antigravity instance...",
+      dualLaunched: "2nd instance started successfully!",
+      activeBadge: "ACTIVE",
       pro: "PRO",
       ultra: "ULTRA",
       free: "FREE"
@@ -2515,7 +2621,9 @@
       appName: "Antigravity 账号切换器",
       appSubtitle: "多账号管理与项目无缝迁移套件",
       tabAccounts: "👤 账号与配额",
-      tabMigration: "⇄ 对话与项目迁移",
+      tabProjects: "📁 项目管理",
+      tabTasks: "⏱ 定时任务",
+      tabMigration: "⇄ 对话迁移",
       activeAccount: "当前活跃账号",
       saveCurrent: "💾 保存当前账号",
       savedAccounts: "已保存账号",
@@ -2543,6 +2651,26 @@
       migrationDone: "迁移顺利完成！",
       backupNotice: "安全备份保存在：",
       author: "由 Madgod-xyz 精心研发",
+      projectsDesc: "选择允许在账号2中访问的项目。未勾选的项目不会在第二实例中加载。",
+      tasksDesc: "管理Windows计划任务。隔离的任务无法被账号2触发或切换。",
+      isolateTaskBtn: "🛡️ 隔离至主账号",
+      unisolateTaskBtn: "🔓 与账号2共享",
+      taskIsolatedBadge: "🔒 仅限账号1",
+      taskSharedBadge: "🌐 共享",
+      taskEnabled: "已启用",
+      taskDisabled: "已禁用",
+      unlinkFromAcc2: "✕ 从账号2解除关联",
+      taskLockedBadge: "🔒 账号1锁定",
+      taskLockedMsg: "该任务归属主账号，在账号2中已被锁定，无法修改。",
+      syncNow: "🔄 同步至账号2",
+      assignToAcc2: "在账号2中启用",
+      noProjectsFound: "未找到任何项目。",
+      noTasksFound: "未找到任何计划任务。",
+      launchDual: "⚡️ 独立多开",
+      launchDualTitle: "在第二个窗口并发运行",
+      dualLaunching: "正在启动第二个实例...",
+      dualLaunched: "第二个实例已成功启动！",
+      activeBadge: "当前活跃",
       pro: "PRO",
       ultra: "ULTRA",
       free: "FREE"
@@ -2551,6 +2679,8 @@
       appName: "Antigravity Switcher",
       appSubtitle: "Suite de Cuentas y Migración de Proyectos",
       tabAccounts: "👤 Cuentas y Cuota",
+      tabProjects: "📁 Proyectos",
+      tabTasks: "⏱ Tareas Programadas",
       tabMigration: "⇄ Migración de Chats",
       activeAccount: "Cuenta Activa",
       saveCurrent: "💾 Guardar Cuenta Actual",
@@ -2579,19 +2709,198 @@
       migrationDone: "¡Migración completada con éxito!",
       backupNotice: "Copia de seguridad guardada en:",
       author: "Desarrollado con precisión por Madgod-xyz",
+      projectsDesc: "Selecciona proyectos accesibles para Cuenta 2. Los proyectos no seleccionados no aparecerán en la Instancia 2.",
+      tasksDesc: "Administrar tareas programadas. Las tareas aisladas no pueden ser ejecutadas o modificadas por Cuenta 2.",
+      isolateTaskBtn: "🛡️ Aislar de Cuenta 2",
+      unisolateTaskBtn: "🔓 Compartir con Cuenta 2",
+      taskIsolatedBadge: "🔒 Solo Cuenta 1",
+      taskSharedBadge: "🌐 Compartido",
+      taskEnabled: "Habilitado",
+      taskDisabled: "Deshabilitado",
+      unlinkFromAcc2: "✕ Desvincular de Cuenta 2",
+      taskLockedBadge: "🔒 Bloqueada en Cuenta 1",
+      taskLockedMsg: "Esta tarea pertenece a la Cuenta 1 y está bloqueada en la Cuenta 2.",
+      syncNow: "🔄 Sincronizar con Cuenta 2",
+      assignToAcc2: "Permitir en Cuenta 2",
+      noProjectsFound: "No se encontraron proyectos.",
+      noTasksFound: "No se encontraron tareas programadas.",
+      launchDual: "⚡️ 2ª Ventana",
+      launchDualTitle: "Abrir concurrentemente en 2ª ventana de Antigravity",
+      dualLaunching: "Iniciando segunda ventana de Antigravity...",
+      dualLaunched: "¡Segunda ventana iniciada exitosamente!",
+      activeBadge: "ACTIVA",
       pro: "PRO",
       ultra: "ULTRA",
       free: "GRATIS"
     }
   };
 
+  function isInstance2Window() {
+    if (window.__antigravity_instance === 'instance_2') return true;
+    try {
+      if (localStorage.getItem('antigravity:instance_id') === 'instance_2') return true;
+      const acc = localStorage.getItem('antigravity:account_email');
+      if (acc && (acc.toLowerCase().includes('instance2') || acc === 'instance_2')) return true;
+    } catch(e) {}
+    if (window.__antigravity_accounts && (window.__antigravity_accounts.instanceId === 'instance_2' || window.__antigravity_accounts.instance_id === 'instance_2')) return true;
+    return false;
+  }
+
+  function isAccount2(email) {
+    if (!email) return false;
+    const norm = String(email).toLowerCase().trim();
+    if (norm === 'instance_2' || norm === 'secondary_account' || norm.includes('account2')) return true;
+    return norm !== 'madgod.cum@gmail.com' && norm !== 'primary_account';
+  }
+
   let swState = {
-    activeAccount: null,
+    activeAccount: (() => {
+      const isInst2 = isInstance2Window();
+      try {
+        let assignedEmail = localStorage.getItem('antigravity:account_email') || window.__antigravity_account || '';
+
+        if (window.__antigravity_accounts && window.__antigravity_accounts.activeAccount) {
+          const a = window.__antigravity_accounts.activeAccount;
+          if (a && a.email && a.email !== 'developer@antigravity.ai') {
+            if (!assignedEmail || a.email.toLowerCase() === assignedEmail.toLowerCase()) {
+              return a;
+            }
+          }
+        }
+        if (window.__antigravity_quota && window.__antigravity_quota.email && window.__antigravity_quota.email !== 'developer@antigravity.ai') {
+          const qEmail = window.__antigravity_quota.email;
+          if (!assignedEmail || qEmail.toLowerCase() === assignedEmail.toLowerCase()) {
+            return window.__antigravity_quota;
+          }
+        }
+        const cachedActive = localStorage.getItem('antigravity:active_quota');
+        if (cachedActive) {
+          const p = JSON.parse(cachedActive);
+          if (p && p.email && p.email !== 'developer@antigravity.ai') {
+            if (!assignedEmail || p.email.toLowerCase() === assignedEmail.toLowerCase()) {
+              return p;
+            }
+          }
+        }
+        if (assignedEmail) {
+          let manifest = {};
+          try {
+            manifest = JSON.parse(localStorage.getItem('antigravity:accounts_manifest') || '{}');
+          } catch(e) {}
+          if (manifest[assignedEmail]) {
+            return {
+              email: assignedEmail,
+              name: manifest[assignedEmail].name || assignedEmail.split('@')[0],
+              avatar: manifest[assignedEmail].avatar || '',
+              tier: manifest[assignedEmail].tier || 'Google AI Pro',
+              tier_code: manifest[assignedEmail].tier_code || 'pro'
+            };
+          }
+        }
+      } catch(e) {}
+      if (isInst2) {
+        return {
+          email: "bombhub.apk@gmail.com",
+          name: "Bombhub",
+          avatar: "https://lh3.googleusercontent.com/a/ACg8ocKTPRhpR3YKTGdBUU3d4-lhBT_p1zB89ww-TIJ_o1g54w4Cfp4=s96-c",
+          tier: "Google AI Pro",
+          tier_code: "pro"
+        };
+      }
+      return {
+        email: "madgod.cum@gmail.com",
+        name: "Madgod",
+        avatar: "https://lh3.googleusercontent.com/a/ACg8ocKL_c03MxCossmd802Ci3aMxOH1oka7dLjgyC_xM0FnDA48xlA=s96-c",
+        tier: "Google AI Pro",
+        tier_code: "pro"
+      };
+    })(),
     savedAccounts: {},
     conversations: [],
+    projects: [],
+    tasks: [],
+    allowedConversations: (() => {
+      try {
+        if (window.__antigravity_accounts && Array.isArray(window.__antigravity_accounts.allowedConversations)) {
+          return window.__antigravity_accounts.allowedConversations;
+        }
+        const s = localStorage.getItem('antigravity:allowed_conversations');
+        if (s) return JSON.parse(s);
+      } catch(e) {}
+      return [];
+    })(),
     isLoaded: false,
     isLoading: false
   };
+
+  function applyConversationIsolationFilter() {
+    if (!isInstance2Window()) {
+      document.querySelectorAll('[data-aqm-isolated="true"]').forEach(el => {
+        el.style.removeProperty('display');
+        el.removeAttribute('data-aqm-isolated');
+      });
+      return;
+    }
+
+    let allowedList = null;
+    if (window.__antigravity_accounts && Array.isArray(window.__antigravity_accounts.allowedConversations)) {
+      allowedList = window.__antigravity_accounts.allowedConversations;
+    } else if (swState && Array.isArray(swState.allowedConversations)) {
+      allowedList = swState.allowedConversations;
+    } else if (swState && swState.allowedConversations && Array.isArray(swState.allowedConversations.instance_2)) {
+      allowedList = swState.allowedConversations.instance_2;
+    }
+
+    if (!allowedList) {
+      try {
+        const stored = localStorage.getItem('antigravity:allowed_conversations');
+        if (stored) allowedList = JSON.parse(stored);
+      } catch(e) {}
+    }
+
+    // Default safe: If allowedList is empty or not set, DO NOT hide anything! Show all!
+    if (!Array.isArray(allowedList) || allowedList.length === 0) {
+      document.querySelectorAll('[data-aqm-isolated="true"]').forEach(el => {
+        el.style.removeProperty('display');
+        el.removeAttribute('data-aqm-isolated');
+      });
+      return;
+    }
+
+    const allowedSet = new Set(allowedList);
+
+    const links = document.querySelectorAll('a[href*="/c/"]');
+    links.forEach(a => {
+      try {
+        const href = a.getAttribute('href') || a.href || '';
+        const match = href.match(/\/c\/([a-f0-9\-]{36})/i);
+        if (!match) return;
+        const cid = match[1];
+
+        let row = a;
+        while (row && row.parentElement && row.parentElement !== document.body) {
+          const p = row.parentElement;
+          if (row.classList.contains('group') || row.classList.contains('w-full') || (p.children.length > 1 && row.classList.contains('relative'))) {
+            break;
+          }
+          row = p;
+        }
+        if (!row) row = a.parentElement || a;
+
+        if (!allowedSet.has(cid)) {
+          if (row.style.display !== 'none') {
+            row.style.setProperty('display', 'none', 'important');
+            row.setAttribute('data-aqm-isolated', 'true');
+          }
+        } else {
+          if (row.getAttribute('data-aqm-isolated') === 'true') {
+            row.style.removeProperty('display');
+            row.removeAttribute('data-aqm-isolated');
+          }
+        }
+      } catch(e) {}
+    });
+  }
 
   // Immediate synchronous restore from localStorage
   try {
@@ -2602,7 +2911,7 @@
     }
   } catch(e) {}
 
-  let swLang = getPersistedSetting('antigravity:switcher_lang', 'fa') || 'fa';
+  let swLang = (userSettings && userSettings.lang) || localStorage.getItem('antigravity:switcher_lang') || 'fa';
   let swTab = 'accounts';
   let swSelectedConvs = new Set();
   let swMode = 'copy';
@@ -2636,40 +2945,74 @@
         return c.charAt(0).toUpperCase() + c.slice(1);
       }
     }
-    return 'Madgod';
+    return 'Developer';
   }
 
   function callDaemonIpc(action, payload = {}) {
-    let handled = false;
     if (typeof window.__aqm_daemon_ipc === 'function') {
       try {
         window.__aqm_daemon_ipc(JSON.stringify({ action, ...payload }));
-        handled = true;
+        return true;
       } catch(e) {}
     }
-    try {
-      localStorage.setItem('antigravity:switcher_command', JSON.stringify({ action, ...payload, _ts: Date.now() }));
-      handled = true;
-    } catch(e) {}
-    return handled;
+    return false;
   }
 
   window.__onSwitcherStateUpdate = function(data) {
     if (!data) return;
-    if (data.activeAccount) {
-      swState.activeAccount = data.activeAccount;
-      window.__antigravity_quota = data.activeAccount;
-      try {
-        localStorage.setItem('antigravity:active_quota', JSON.stringify(data.activeAccount));
-      } catch(e) {}
-    }
+    const isInst2 = isInstance2Window();
+
+    // If payload has instanceId and doesn't match this window, ignore activeAccount
+    const instMismatch = (data.instanceId && ((isInst2 && data.instanceId !== 'instance_2') || (!isInst2 && data.instanceId !== 'instance_1')));
+
     if (data.savedAccounts) swState.savedAccounts = data.savedAccounts;
     if (data.conversations) swState.conversations = data.conversations;
+    if (data.projects) swState.projects = data.projects;
+    if (data.tasks) swState.tasks = data.tasks;
+    if (data.allowedConversations) {
+      swState.allowedConversations = data.allowedConversations;
+      try {
+        localStorage.setItem('antigravity:allowed_conversations', JSON.stringify(data.allowedConversations));
+      } catch(e) {}
+    }
+
+    if (data.activeAccount && !instMismatch) {
+      const prevAcc = swState.activeAccount || {};
+      let newAcc = { ...data.activeAccount };
+
+      if (newAcc.email) {
+        try {
+          localStorage.setItem('antigravity:account_email', newAcc.email);
+        } catch(e) {}
+      }
+
+      // Never downgrade an active pro/ultra tier to free on transient network updates
+      if ((!newAcc.tier_code || newAcc.tier_code === 'free') && (prevAcc.tier_code === 'pro' || prevAcc.tier_code === 'ultra' || prevAcc.tier_code === 'enterprise')) {
+        newAcc.tier_code = prevAcc.tier_code;
+        newAcc.tier = prevAcc.tier;
+      }
+      // Never drop an avatar to empty on transient updates
+      if (!newAcc.avatar && prevAcc.avatar) {
+        newAcc.avatar = prevAcc.avatar;
+      }
+      if (!newAcc.avatar) {
+        const saved = (swState.savedAccounts && swState.savedAccounts[newAcc.email || prevAcc.email]) || {};
+        if (saved.avatar) newAcc.avatar = saved.avatar;
+      }
+
+      swState.activeAccount = newAcc;
+      window.__antigravity_quota = newAcc;
+      try {
+        localStorage.setItem('antigravity:active_quota', JSON.stringify(newAcc));
+      } catch(e) {}
+    }
+
     swState.isLoaded = true;
     swState.isLoading = false;
     try {
       localStorage.setItem('antigravity:accounts_manifest', JSON.stringify(swState.savedAccounts));
     } catch(e) {}
+    applyConversationIsolationFilter();
     if (typeof renderBadge === 'function') renderBadge();
     const modal = document.getElementById('antigravity-switcher-modal');
     if (modal && modal.classList.contains('aqm-active')) {
@@ -2680,20 +3023,14 @@
   window.__showSwitcherToast = showSwitcherToast;
 
   function fetchSwitcherState(cb) {
-    if (callDaemonIpc('getState')) {
-      if (cb) setTimeout(cb, 120);
-      return;
-    }
-    if (swState.isLoading) return;
-    swState.isLoading = true;
-    fetch('http://127.0.0.1:39281/api/state')
+    const inst = isInstance2Window() ? 'instance_2' : 'instance_1';
+    fetch(`http://127.0.0.1:39281/api/state?instance=${inst}`)
       .then(r => r.json())
       .then(data => {
         window.__onSwitcherStateUpdate(data);
         if (cb) cb();
       })
       .catch(() => {
-        swState.isLoading = false;
         if (cb) cb();
       });
   }
@@ -2793,17 +3130,35 @@
     if (!modal) return;
 
     const theme = getActiveTheme();
-    const t = SW_I18N[swLang] || SW_I18N.fa;
+    const t = SW_I18N[swLang] || SW_I18N.en;
     const isFa = (swLang === 'fa');
     const dir = isFa ? 'rtl' : 'ltr';
     const fontFamily = "'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 
-    const activeAcc = swState.activeAccount || {};
-    const email = activeAcc.email || (window.__antigravity_quota && window.__antigravity_quota.email) || 'developer@antigravity.ai';
+    const isInst2 = isInstance2Window();
+    const activeAcc = swState.activeAccount || currentUsage || {};
+    let email = activeAcc.email;
+    let assignedEmail = '';
+    try {
+      assignedEmail = localStorage.getItem('antigravity:account_email') || window.__antigravity_account || '';
+    } catch(e) {}
+    if (assignedEmail && swState.savedAccounts && swState.savedAccounts[assignedEmail]) {
+      email = assignedEmail;
+      Object.assign(activeAcc, swState.savedAccounts[assignedEmail]);
+    } else if (email && swState.savedAccounts && swState.savedAccounts[email]) {
+      Object.assign(activeAcc, swState.savedAccounts[email]);
+    } else if (assignedEmail) {
+      email = assignedEmail;
+    }
+    if (!email) email = isInst2 ? 'bombhub.apk@gmail.com' : 'madgod.cum@gmail.com';
     let cleanDisplayName = (typeof getCleanUserDisplayName === 'function') 
       ? getCleanUserDisplayName(activeAcc.name, email) 
       : ((email ? email.split('@')[0].split('.')[0] : 'User'));
     cleanDisplayName = cleanDisplayName ? (cleanDisplayName.charAt(0).toUpperCase() + cleanDisplayName.slice(1)) : 'User';
+    if (isInstance2Window() && (!cleanDisplayName || cleanDisplayName.toLowerCase() === 'user')) {
+      cleanDisplayName = (email ? (email.split('@')[0].split('.')[0].charAt(0).toUpperCase() + email.split('@')[0].split('.')[0].slice(1)) : 'Secondary');
+    }
+    else if (cleanDisplayName.toLowerCase() === 'developer') cleanDisplayName = 'Account 1';
     const avatar = activeAcc.avatar || '';
     const tier = activeAcc.tier || 'Google AI Pro';
     const tierCode = (activeAcc.tier_code || 'pro').toLowerCase();
@@ -2817,46 +3172,60 @@
     const savedCount = savedKeys.length;
     const isCurrentSaved = !!(email && swState.savedAccounts && swState.savedAccounts[email]);
 
-    // Filter conversations for Migration tab
+    swTab = swTab || 'accounts';
     const filteredConvs = (swState.conversations || []).filter(c => {
-      if (!swSearch.trim()) return true;
+      if (!swSearch) return true;
       const q = swSearch.toLowerCase();
       return (c.title && c.title.toLowerCase().includes(q)) || (c.id && c.id.toLowerCase().includes(q));
     });
+    const projectsList = swState.projects || [];
+    const tasksList = swState.tasks || [];
 
     modal.innerHTML = `
       <div class="aqm-switcher-sheet" style="font-family:${fontFamily};direction:${dir};color:#f8fafc;">
         
-        <!-- Header (Clean & Minimal) -->
+        <!-- Header -->
         <div style="padding:12px 18px;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
           <div style="display:flex;align-items:center;gap:8px;">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.85;">
               <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
               <circle cx="12" cy="7" r="4"/>
             </svg>
-            <span style="font-size:13.5px;font-weight:700;">${isFa ? 'مدیریت حساب‌ها' : 'Account Manager'}</span>
-          </div>
-
-          <!-- Minimal Segmented Tabs in Header -->
-          <div style="display:flex;gap:4px;background:rgba(0,0,0,0.25);padding:3px;border-radius:9999px;border:1px solid rgba(255,255,255,0.06);">
-            <button class="aqm-sw-tab-btn ${swTab === 'accounts' ? 'active' : ''}" id="aqm-tab-btn-accounts" style="padding:3px 12px;font-size:11px;">
-              <span>${isFa ? 'حساب‌ها' : 'Accounts'}</span>
-            </button>
-            <button class="aqm-sw-tab-btn ${swTab === 'migration' ? 'active' : ''}" id="aqm-tab-btn-migration" style="padding:3px 12px;font-size:11px;">
-              <span>${isFa ? 'انتقال گفتگوها' : 'Migration'}</span>
-              <span style="font-size:9.5px;opacity:0.6;font-family:'JetBrains Mono',monospace;">(${(swState.conversations || []).length})</span>
-            </button>
+            <span style="font-size:13.5px;font-weight:700;">${t.appName || (isFa ? 'مدیریت حساب‌ها' : 'Antigravity Switcher')}</span>
           </div>
 
           <div style="display:flex;align-items:center;gap:8px;">
-            <!-- Language Switcher -->
-            <button id="aqm-lang-toggle-btn" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);color:#94a3b8;padding:2px 8px;border-radius:9999px;font-size:10.5px;font-weight:600;cursor:pointer;transition:all 0.15s;outline:none;">
-              ${swLang === 'fa' ? 'EN' : 'فا'}
+            <!-- Language Switcher (Tri-Language EN / فا / ES) -->
+            <button id="aqm-lang-toggle-btn" title="Toggle Language (EN / فا / ES)" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);color:#94a3b8;padding:2px 8px;border-radius:9999px;font-size:10.5px;font-weight:600;cursor:pointer;transition:all 0.15s;outline:none;">
+              ${swLang === 'fa' ? 'فا' : (swLang === 'es' ? 'ES' : 'EN')}
             </button>
 
             <!-- Close Button -->
             <button id="aqm-sw-modal-close" style="width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);color:#94a3b8;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px;transition:all 0.15s;">✕</button>
           </div>
+        </div>
+
+        <!-- Tab Navigation Bar (Liquid Glass Pill Tabs) -->
+        <div style="display:flex;gap:6px;padding:8px 18px;border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.12);overflow-x:auto;flex-shrink:0;" class="aqm-custom-scroll">
+          <button class="aqm-sw-tab-btn ${swTab === 'accounts' ? 'active' : ''}" id="aqm-tab-btn-accounts">
+            <span>👤</span>
+            <span>${t.tabAccounts || 'Accounts'}</span>
+          </button>
+          <button class="aqm-sw-tab-btn ${swTab === 'projects' ? 'active' : ''}" id="aqm-tab-btn-projects">
+            <span>📁</span>
+            <span>${t.tabProjects || 'Projects'}</span>
+            <span style="font-size:9px;padding:0 5px;border-radius:9999px;background:rgba(255,255,255,0.08);">${projectsList.length}</span>
+          </button>
+          <button class="aqm-sw-tab-btn ${swTab === 'tasks' ? 'active' : ''}" id="aqm-tab-btn-tasks">
+            <span>⏱</span>
+            <span>${t.tabTasks || 'Tasks'}</span>
+            <span style="font-size:9px;padding:0 5px;border-radius:9999px;background:rgba(255,255,255,0.08);">${tasksList.length}</span>
+          </button>
+          <button class="aqm-sw-tab-btn ${swTab === 'migration' ? 'active' : ''}" id="aqm-tab-btn-migration">
+            <span>⇄</span>
+            <span>${t.tabMigration || 'Migration'}</span>
+            <span style="font-size:9px;padding:0 5px;border-radius:9999px;background:rgba(255,255,255,0.08);">${(swState.conversations || []).length}</span>
+          </button>
         </div>
 
         <!-- Content Body (Scrollable) -->
@@ -2994,6 +3363,7 @@
                     const accEmailStr = acc.email || k;
                     const accShort = getCleanUserDisplayName(acc.name, accEmailStr);
                     const accInitial = accShort.charAt(0).toUpperCase();
+                    const needsAuth = !!(acc.needs_reauth || !acc.token_file);
                     return `
                       <div class="aqm-sw-card" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;${isCur ? 'border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.03);' : ''}">
                         <div style="display:flex;align-items:center;gap:9px;">
@@ -3004,6 +3374,9 @@
                             <div style="display:flex;align-items:center;gap:6px;">
                               <span style="font-size:12px;font-weight:700;">${accShort}</span>
                               <span style="font-size:8.5px;padding:1px 5px;border-radius:9999px;background:rgba(255,255,255,0.06);color:#94a3b8;text-transform:uppercase;">${acc.tier_code || 'PRO'}</span>
+                              ${needsAuth ? `
+                                <span style="font-size:8.5px;padding:1px 5px;border-radius:9999px;background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);">${isFa ? 'نیاز به ورود' : 'Needs Auth'}</span>
+                              ` : ''}
                             </div>
                             <div style="font-size:10.5px;color:#64748b;font-family:'JetBrains Mono',monospace;" dir="ltr">${acc.email || k}</div>
                           </div>
@@ -3011,14 +3384,158 @@
 
                         <div style="display:flex;align-items:center;gap:6px;">
                           ${isCur ? `
-                            <span style="font-size:10.5px;color:#10b981;font-weight:700;padding:2px 8px;">${isFa ? 'فعال' : 'Active'}</span>
+                            <span style="font-size:10.5px;color:#10b981;font-weight:700;padding:2px 8px;">${t.activeBadge || (isFa ? 'فعال' : 'Active')}</span>
+                          ` : needsAuth ? `
+                            <button class="aqm-sw-btn aqm-sw-btn-primary" data-action="reauth" data-acc="${k}" data-email="${accEmailStr}" style="padding:3px 10px;font-size:11px;background:linear-gradient(135deg, #f59e0b, #d97706) !important;border-color:rgba(245,158,11,0.5) !important;" title="${isFa ? 'ورود به حساب گوگل' : 'Sign In with Google'}">
+                              <span>🔑</span>
+                              <span>${isFa ? 'ورود با گوگل' : 'Sign In'}</span>
+                            </button>
                           ` : `
                             <button class="aqm-sw-btn aqm-sw-btn-primary" data-action="switch" data-acc="${k}" style="padding:3px 10px;font-size:11px;">
-                              <span>${isFa ? 'سوئیچ' : 'Switch'}</span>
+                              <span>${t.switchNow || (isFa ? 'سوئیچ' : 'Switch')}</span>
+                            </button>
+                            <button class="aqm-sw-btn" data-action="launch-dual" data-acc="${k}" data-account="${k}" data-email="${accEmailStr}" title="${t.launchDualTitle || 'Open concurrently in 2nd Antigravity Window'}" style="padding:3px 8px;font-size:11px;background:rgba(59,130,246,0.15);border:1px solid rgba(59,130,246,0.3);color:#60a5fa;display:inline-flex;align-items:center;gap:3px;cursor:pointer;">
+                              <span>${t.launchDual || '⚡️ 2nd Window'}</span>
                             </button>
                           `}
-                          <button class="aqm-sw-btn" data-action="delete" data-acc="${k}" title="${isFa ? 'حذف از لیست' : 'Delete'}" style="padding:3px 7px;font-size:10.5px;color:#94a3b8;border-color:transparent;background:transparent;">
+                          <button class="aqm-sw-btn" data-action="delete" data-acc="${k}" title="${t.deleteAccount || (isFa ? 'حذف از لیست' : 'Delete')}" style="padding:3px 7px;font-size:10.5px;color:#94a3b8;border-color:transparent;background:transparent;">
                             <span>✕</span>
+                          </button>
+                        </div>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              `}
+            </div>
+          ` : swTab === 'projects' ? `
+            <!-- PROJECTS TAB -->
+            <div style="display:flex;flex-direction:column;gap:10px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 2px;">
+                <div style="font-size:11px;color:#94a3b8;line-height:1.5;">
+                  ${t.projectsDesc}
+                </div>
+                <div style="display:flex;gap:6px;flex-shrink:0;">
+                  <button class="aqm-sw-btn" id="aqm-proj-allow-all-btn" style="padding:3px 8px;font-size:10.5px;color:#10b981;border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.08);">
+                    ✓ ${isFa ? 'مجاز کردن همه' : (swLang === 'es' ? 'Permitir Todos' : 'Allow All')}
+                  </button>
+                  <button class="aqm-sw-btn" id="aqm-proj-isolate-all-btn" style="padding:3px 8px;font-size:10.5px;color:#f87171;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);">
+                    ✕ ${isFa ? 'جداسازی همه' : (swLang === 'es' ? 'Aislar Todos' : 'Isolate All')}
+                  </button>
+                </div>
+              </div>
+              ${projectsList.length === 0 ? `
+                <div class="aqm-sw-card" style="text-align:center;padding:24px 14px;border-style:dashed;">
+                  <div style="font-size:11.5px;color:#94a3b8;">${t.noProjectsFound}</div>
+                </div>
+              ` : `
+                <div style="display:flex;flex-direction:column;gap:7px;max-height:360px;overflow-y:auto;" class="aqm-custom-scroll">
+                  ${projectsList.map(p => {
+                    const assigned = p.assigned_accounts || ['instance_1'];
+                    const isAcc2 = !!(p.is_instance2_enabled || p.is_shared || assigned.includes('instance_2') || assigned.some(a => isAccount2(a)));
+                    return `
+                      <div class="aqm-sw-card" style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                        <div style="flex:1;min-width:0;">
+                          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                            <span style="font-size:12.5px;font-weight:700;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.name || p.id}</span>
+                            <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.3);">${isFa ? 'اکانت ۱' : 'Account 1'}</span>
+                            ${isAcc2 ? `
+                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);">${isFa ? 'اکانت ۲' : 'Account 2'}</span>
+                            ` : `
+                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(255,255,255,0.06);color:#94a3b8;">${isFa ? 'فقط اکانت ۱' : 'Account 1 Only'}</span>
+                            `}
+                          </div>
+                          <div style="font-size:10px;color:#64748b;font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" dir="ltr" title="${p.path || ''}">
+                            ${p.path || p.id}
+                          </div>
+                          <div style="font-size:10px;color:#94a3b8;margin-top:3px;">
+                            💬 ${(p.conversations || []).length || p.conversation_count || 0} ${isFa ? 'مکالمه' : 'chats'}
+                          </div>
+                        </div>
+
+                        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                          <label style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:#cbd5e1;cursor:pointer;background:rgba(255,255,255,0.04);padding:4px 9px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);">
+                            <input type="checkbox" class="aqm-proj-toggle-cb" data-pid="${p.id}" ${isAcc2 ? 'checked' : ''} style="width:14px;height:14px;accent-color:#10b981;cursor:pointer;" />
+                            <span>${t.assignToAcc2}</span>
+                          </label>
+                          <button class="aqm-sw-btn aqm-proj-sync-btn" data-pid="${p.id}" title="${t.syncNow}" style="padding:4px 9px;font-size:11px;">
+                            <span>🔄</span>
+                            <span>${isFa ? 'سینک' : 'Sync'}</span>
+                          </button>
+                          <button class="aqm-sw-btn aqm-proj-unlink-btn" data-pid="${p.id}" title="${t.unlinkFromAcc2}" style="padding:4px 9px;font-size:11px;color:#f87171;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);">
+                            <span>✕</span>
+                            <span>${isFa ? 'جداسازی' : (swLang === 'es' ? 'Desvincular' : 'Unlink')}</span>
+                          </button>
+                        </div>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              `}
+            </div>
+          ` : swTab === 'tasks' ? `
+            <!-- TASKS TAB -->
+            <div style="display:flex;flex-direction:column;gap:10px;">
+              <div style="font-size:11px;color:#94a3b8;line-height:1.5;padding:0 2px;">
+                ${t.tasksDesc}
+              </div>
+              ${tasksList.length === 0 ? `
+                <div class="aqm-sw-card" style="text-align:center;padding:24px 14px;border-style:dashed;">
+                  <div style="font-size:11.5px;color:#94a3b8;">${t.noTasksFound}</div>
+                </div>
+              ` : `
+                <div style="display:flex;flex-direction:column;gap:7px;max-height:360px;overflow-y:auto;" class="aqm-custom-scroll">
+                  ${tasksList.map(task => {
+                    const isIso = !!task.isolated_from_account2;
+                    const isEn = !!task.enabled;
+                    const owner = (task.owner_account || '').toLowerCase();
+                    const isOwnerAcc1 = !owner || owner === 'instance_1' || !owner.includes('instance_2');
+                    const isLockedInInst2 = isInstance2Window() && isIso && isOwnerAcc1;
+                    return `
+                      <div class="aqm-sw-card" style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;${isLockedInInst2 ? 'border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.03);' : (isIso ? 'border-color:rgba(251,191,36,0.25);background:rgba(251,191,36,0.02);' : '')}">
+                        <div style="flex:1;min-width:0;">
+                          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                            <span style="font-size:12.5px;font-weight:700;color:#f8fafc;">${task.task_name}</span>
+                            ${isEn ? `
+                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);">● ${t.taskEnabled}</span>
+                            ` : `
+                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(255,255,255,0.06);color:#94a3b8;">○ ${t.taskDisabled}</span>
+                            `}
+                            ${isLockedInInst2 ? `
+                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);">${t.taskLockedBadge || '🔒 قفل شده در اکانت ۱'}</span>
+                            ` : isIso ? `
+                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.3);">${t.taskIsolatedBadge}</span>
+                            ` : `
+                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.3);">${t.taskSharedBadge}</span>
+                            `}
+                          </div>
+                          <div style="font-size:10.5px;color:#94a3b8;margin-bottom:2px;">
+                            ⏱ ${task.schedule || task.trigger || (isFa ? 'زمان‌بندی روزانه' : 'Daily Schedule')}
+                          </div>
+                          <div style="font-size:10px;color:#64748b;font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" dir="ltr" title="${task.command || task.action || ''}">
+                            ${task.command || task.action || task.description || ''}
+                          </div>
+                        </div>
+
+                        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+                          <button class="aqm-sw-btn aqm-task-toggle-btn" 
+                            data-task="${task.task_name}" 
+                            data-enabled="${isEn}" 
+                            data-locked="${isLockedInInst2}" 
+                            ${isLockedInInst2 ? 'disabled' : ''} 
+                            title="${isLockedInInst2 ? t.taskLockedMsg : (isEn ? (isFa ? 'غیرفعال‌سازی تسک' : 'Disable Task') : (isFa ? 'فعال‌سازی تسک' : 'Enable Task'))}" 
+                            style="padding:4px 9px;font-size:11px;${isLockedInInst2 ? 'opacity:0.4;cursor:not-allowed;' : ''}">
+                            <span>${isEn ? '⏸' : '▶'}</span>
+                            <span>${isEn ? (isFa ? 'غیرفعال‌سازی' : 'Disable') : (isFa ? 'فعال‌سازی' : 'Enable')}</span>
+                          </button>
+                          <button class="aqm-sw-btn ${isIso ? '' : 'aqm-sw-btn-primary'} aqm-task-isolate-btn" 
+                            data-task="${task.task_name}" 
+                            data-isolated="${isIso}" 
+                            data-locked="${isLockedInInst2}" 
+                            ${isLockedInInst2 ? 'disabled' : ''} 
+                            title="${isLockedInInst2 ? t.taskLockedMsg : (isIso ? t.unisolateTaskBtn : t.isolateTaskBtn)}" 
+                            style="padding:4px 10px;font-size:11px;${isLockedInInst2 ? 'opacity:0.4;cursor:not-allowed;' : ''}">
+                            <span>${isIso ? t.unisolateTaskBtn : t.isolateTaskBtn}</span>
                           </button>
                         </div>
                       </div>
@@ -3128,14 +3645,21 @@
     const langBtn = modal.querySelector('#aqm-lang-toggle-btn');
     if (langBtn) {
       langBtn.onclick = () => {
-        swLang = (swLang === 'fa' ? 'en' : 'fa');
-        persistSetting('antigravity:switcher_lang', swLang);
+        if (swLang === 'en') swLang = 'fa';
+        else if (swLang === 'fa') swLang = 'es';
+        else swLang = 'en';
+        try { localStorage.setItem('antigravity:switcher_lang', swLang); } catch(e){}
+        persistUserSettings({ lang: swLang });
         renderSwitcherModal();
       };
     }
 
     const tabAcc = modal.querySelector('#aqm-tab-btn-accounts');
     if (tabAcc) tabAcc.onclick = () => { swTab = 'accounts'; renderSwitcherModal(); };
+    const tabProj = modal.querySelector('#aqm-tab-btn-projects');
+    if (tabProj) tabProj.onclick = () => { swTab = 'projects'; renderSwitcherModal(); };
+    const tabTasks = modal.querySelector('#aqm-tab-btn-tasks');
+    if (tabTasks) tabTasks.onclick = () => { swTab = 'tasks'; renderSwitcherModal(); };
     const tabMig = modal.querySelector('#aqm-tab-btn-migration');
     if (tabMig) tabMig.onclick = () => { swTab = 'migration'; renderSwitcherModal(); };
 
@@ -3251,6 +3775,31 @@
       };
     }
 
+    // Re-Auth / Sign-In action for unauthenticated accounts
+    modal.querySelectorAll('[data-action="reauth"]').forEach(btn => {
+      btn.onclick = (e) => {
+        if (e) e.stopPropagation();
+        const accKey = btn.getAttribute('data-acc') || btn.getAttribute('data-account') || btn.getAttribute('data-email') || (btn.closest && btn.closest('[data-acc]') && btn.closest('[data-acc]').getAttribute('data-acc'));
+        showSwitcherToast(isFa ? 'در حال باز کردن صفحه ورود گوگل در مرورگر...' : 'Opening Google sign-in...');
+        fetch('http://127.0.0.1:39281/api/oauth_signin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountKey: accKey })
+        })
+          .then(r => r.json())
+          .then(res => {
+            if (res && res.auth_url) {
+              swOAuthUrl = res.auth_url;
+              renderSwitcherModal();
+              try { window.open(res.auth_url, '_blank'); } catch(err) {}
+            }
+          })
+          .catch(() => {
+            callDaemonIpc('oauth_signin', { accountKey: accKey });
+          });
+      };
+    });
+
     // Switch Account action
     modal.querySelectorAll('[data-action="switch"]').forEach(btn => {
       btn.onclick = () => {
@@ -3264,15 +3813,85 @@
         })
         .then(r => r.json())
         .then(res => {
-          if (res.success) {
+          if (res && res.needs_reauth) {
+            showSwitcherToast(res.error || (isFa ? 'این حساب نیاز به ورود دارد' : 'Account requires sign-in'), true);
+            fetch('http://127.0.0.1:39281/api/oauth_signin', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ accountKey: accKey })
+            })
+              .then(r => r.json())
+              .then(ores => {
+                if (ores && ores.auth_url) {
+                  swOAuthUrl = ores.auth_url;
+                  renderSwitcherModal();
+                  try { window.open(ores.auth_url, '_blank'); } catch(err) {}
+                }
+              }).catch(() => { callDaemonIpc('oauth_signin', { accountKey: accKey }); });
+            return;
+          }
+          if (res && res.success) {
             showSwitcherToast(isFa ? 'حساب فعال شد. در حال راه‌اندازی مجدد...' : 'Account active. Restarting...');
             fetchSwitcherState(() => { renderSwitcherModal(); });
           } else {
-            showSwitcherToast(res.error || (isFa ? 'خطا در جابجایی حساب' : 'Switch error'), true);
+            showSwitcherToast((res && res.error) || (isFa ? 'خطا در جابجایی حساب' : 'Switch error'), true);
           }
         })
         .catch(() => {
           showSwitcherToast(isFa ? 'خطا در اتصال به سرویس لوکال' : 'Connection error', true);
+        });
+      };
+    });
+
+    // Launch Dual Instance (Secondary Window) action
+    modal.querySelectorAll('[data-action="launch-dual"]').forEach(btn => {
+      btn.onclick = (e) => {
+        if (e) e.stopPropagation();
+        const accKey = btn.getAttribute('data-acc') || btn.getAttribute('data-account') || btn.getAttribute('data-email') || (btn.closest && btn.closest('[data-acc]') && btn.closest('[data-acc]').getAttribute('data-acc'));
+        if (!accKey) return;
+
+        btn.disabled = true;
+        setTimeout(() => { try { btn.disabled = false; } catch(err){} }, 3000);
+
+        showSwitcherToast(t.dualLaunching || (isFa ? 'در حال اجرای پنجره دوم آنتی‌گرویتی...' : 'Launching 2nd Antigravity instance...'));
+
+        if (callDaemonIpc('launch_dual', { accountKey: accKey })) {
+          return;
+        }
+
+        // Fallback to daemon HTTP endpoint if CDP IPC is not available
+        fetch('http://127.0.0.1:39281/api/launch_dual', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountKey: accKey })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.needs_reauth) {
+            showSwitcherToast(res.error || (isFa ? 'این حساب نیاز به ورود دارد' : 'Account requires sign-in'), true);
+            fetch('http://127.0.0.1:39281/api/oauth_signin', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ accountKey: accKey })
+            })
+              .then(r => r.json())
+              .then(ores => {
+                if (ores && ores.auth_url) {
+                  swOAuthUrl = ores.auth_url;
+                  renderSwitcherModal();
+                  try { window.open(ores.auth_url, '_blank'); } catch(err) {}
+                }
+              }).catch(() => { callDaemonIpc('oauth_signin', { accountKey: accKey }); });
+            return;
+          }
+          if (res && res.success) {
+            showSwitcherToast(res.msg || t.dualLaunched || (isFa ? 'پنجره دوم با موفقیت اجرا شد!' : '2nd instance started successfully!'));
+          } else if (res && res.error) {
+            showSwitcherToast(res.error, true);
+          }
+        })
+        .catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرویس لانچر' : 'Launcher connection error', true);
         });
       };
     });
@@ -3297,6 +3916,188 @@
             }
           });
         }
+      };
+    });
+
+    // Projects Tab Actions
+    const allowAllBtn = modal.querySelector('#aqm-proj-allow-all-btn');
+    if (allowAllBtn) {
+      allowAllBtn.onclick = async () => {
+        showSwitcherToast(isFa ? 'در حال فعال‌سازی تمام پروژه‌ها برای اکانت ۲...' : 'Allowing all projects in Account 2...');
+        for (const p of projectsList) {
+          await fetch('http://127.0.0.1:39281/api/project_assign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ projectId: p.id, account: 'instance_2', enabled: true })
+          }).catch(() => {});
+        }
+        showSwitcherToast(isFa ? 'تمام پروژه‌ها برای اکانت ۲ فعال شدند' : 'All projects allowed in Account 2');
+        applyConversationIsolationFilter();
+        fetchSwitcherState(() => renderSwitcherModal());
+      };
+    }
+
+    const isolateAllBtn = modal.querySelector('#aqm-proj-isolate-all-btn');
+    if (isolateAllBtn) {
+      isolateAllBtn.onclick = async () => {
+        showSwitcherToast(isFa ? 'در حال جداسازی تمام پروژه‌ها از اکانت ۲...' : 'Isolating all projects to Account 1...');
+        for (const p of projectsList) {
+          await fetch('http://127.0.0.1:39281/api/project_unlink', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ projectId: p.id, account: 'instance_2' })
+          }).catch(() => {});
+        }
+        showSwitcherToast(isFa ? 'تمام پروژه‌ها از اکانت ۲ جدا شدند' : 'All projects isolated from Account 2');
+        applyConversationIsolationFilter();
+        fetchSwitcherState(() => renderSwitcherModal());
+      };
+    }
+
+    modal.querySelectorAll('.aqm-proj-toggle-cb').forEach(cb => {
+      cb.onchange = () => {
+        const pid = cb.getAttribute('data-pid');
+        const en = cb.checked;
+        showSwitcherToast(isFa ? 'در حال به‌روزرسانی دسترسی پروژه...' : 'Updating project access...');
+        const endpoint = en ? '/api/project_assign' : '/api/project_unlink';
+        const payload = en ? { projectId: pid, account: 'instance_2', enabled: true } : { projectId: pid, account: 'instance_2' };
+        fetch(`http://127.0.0.1:39281${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? 'پروژه با موفقیت به‌روزرسانی شد' : 'Project updated');
+            applyConversationIsolationFilter();
+            fetchSwitcherState(() => { renderSwitcherModal(); });
+          } else {
+            showSwitcherToast(res.error || 'Error', true);
+          }
+        })
+        .catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
+      };
+    });
+
+    modal.querySelectorAll('.aqm-proj-sync-btn').forEach(btn => {
+      btn.onclick = () => {
+        const pid = btn.getAttribute('data-pid');
+        showSwitcherToast(isFa ? 'در حال سینک پروژه به اکانت ۲...' : 'Syncing project to Account 2...');
+        fetch('http://127.0.0.1:39281/api/project_sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: pid, targetAccount: 'instance_2' })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? 'پروژه با اکانت ۲ همگام‌سازی شد' : 'Project synced to Account 2');
+            applyConversationIsolationFilter();
+            fetchSwitcherState(() => { renderSwitcherModal(); });
+          } else {
+            showSwitcherToast(res.error || 'Error', true);
+          }
+        })
+        .catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
+      };
+    });
+
+    modal.querySelectorAll('.aqm-proj-unlink-btn').forEach(btn => {
+      btn.onclick = () => {
+        const pid = btn.getAttribute('data-pid');
+        showSwitcherToast(isFa ? 'در حال جداسازی پروژه از اکانت ۲...' : 'Unlinking project from Account 2...');
+        fetch('http://127.0.0.1:39281/api/project_unlink', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: pid, account: 'instance_2' })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? 'پروژه با موفقیت از اکانت ۲ جدا شد' : 'Project unlinked from Account 2');
+            applyConversationIsolationFilter();
+            fetchSwitcherState(() => { renderSwitcherModal(); });
+          } else {
+            showSwitcherToast(res.error || 'Error', true);
+          }
+        })
+        .catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
+      };
+    });
+
+    // Tasks Tab Actions
+    modal.querySelectorAll('.aqm-task-toggle-btn').forEach(btn => {
+      btn.onclick = () => {
+        if (btn.getAttribute('data-locked') === 'true' || btn.hasAttribute('disabled')) {
+          showSwitcherToast(t.taskLockedMsg || (isFa ? 'این تسک متعلق به اکانت اصلی است و از اکانت ۲ قابل تغییر نیست.' : 'This task belongs to Account 1 and cannot be modified from Account 2.'), true);
+          return;
+        }
+        const tname = btn.getAttribute('data-task');
+        const curEn = btn.getAttribute('data-enabled') === 'true';
+        showSwitcherToast(isFa ? 'در حال تغییر وضعیت تسک...' : 'Toggling task state...');
+        const callerAcc = isInstance2Window() ? (window.__antigravity_account || 'instance_2') : email;
+        if (callDaemonIpc('toggleTask', { taskName: tname, enabled: !curEn, callerAccount: callerAcc })) {
+          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
+          return;
+        }
+        fetch('http://127.0.0.1:39281/api/task_toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskName: tname, enabled: !curEn, callerAccount: callerAcc })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? 'وضعیت تسک با موفقیت تغییر کرد' : 'Task state updated');
+            fetchSwitcherState(() => { renderSwitcherModal(); });
+          } else {
+            showSwitcherToast(res.error || (isFa ? 'عدم دسترسی به تغییر وضعیت تسک' : 'Access denied'), true);
+          }
+        })
+        .catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
+      };
+    });
+
+    modal.querySelectorAll('.aqm-task-isolate-btn').forEach(btn => {
+      btn.onclick = () => {
+        if (btn.getAttribute('data-locked') === 'true' || btn.hasAttribute('disabled')) {
+          showSwitcherToast(t.taskLockedMsg || (isFa ? 'تغییر وضعیت ایزولاسیون این تسک از اکانت ۲ مجاز نیست.' : 'Modifying isolation of this task from Account 2 is not permitted.'), true);
+          return;
+        }
+        const tname = btn.getAttribute('data-task');
+        const curIso = btn.getAttribute('data-isolated') === 'true';
+        showSwitcherToast(isFa ? 'در حال تغییر وضعیت ایزولاسیون تسک...' : 'Updating task isolation...');
+        const callerAcc = isInstance2Window() ? (window.__antigravity_account || 'instance_2') : email;
+        if (callDaemonIpc('isolateTask', { taskName: tname, isolate: !curIso, callerAccount: callerAcc })) {
+          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
+          return;
+        }
+        fetch('http://127.0.0.1:39281/api/task_isolate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskName: tname, isolate: !curIso, callerAccount: callerAcc })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? 'ایزولاسیون تسک به‌روزرسانی شد' : 'Task isolation updated');
+            fetchSwitcherState(() => { renderSwitcherModal(); });
+          } else {
+            showSwitcherToast(res.error || 'Error', true);
+          }
+        })
+        .catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
       };
     });
 
@@ -3426,8 +4227,15 @@
       badge = document.createElement('div');
       badge.id = 'antigravity-usage-badge';
       const svg = trigger.querySelector('svg');
-      if (svg) trigger.insertBefore(badge, svg);
-      else trigger.appendChild(badge);
+      if (svg && svg.parentNode) {
+        try {
+          svg.parentNode.insertBefore(badge, svg);
+        } catch (e) {
+          trigger.appendChild(badge);
+        }
+      } else {
+        trigger.appendChild(badge);
+      }
     }
     badge.style.display = 'inline-flex';
     badge.style.alignItems = 'center';
@@ -3476,46 +4284,44 @@
     pill.style.transition = 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)';
 
     const isRem = (displayMode === 'remaining');
-    const activePool = (typeof getActiveModelPool === 'function') ? getActiveModelPool(currentUsage) : (currentUsage.session || {});
-    const activeModelTitle = activePool.name || getActiveModelName() || 'Gemini Quota';
-    const sessUsed = Math.round(activePool.used_pct ?? (currentUsage.session?.used_pct ?? 28));
-    const sessRem = Math.round(activePool.remaining_pct ?? (currentUsage.session?.remaining_pct ?? (100 - sessUsed)));
-    const sessReset = activePool.resets_in || currentUsage.session?.resets_in || '2 hr 4 min';
+    const sessRem = Math.round(currentUsage.session?.remaining_pct ?? (100 - Math.round(currentUsage.session?.used_pct ?? 0)));
+    const sessUsed = Math.round(currentUsage.session?.used_pct ?? (100 - sessRem));
+    const sessReset = currentUsage.session?.resets_in || 'Ready';
 
-    const weekUsed = Math.round(currentUsage.weekly?.used_pct ?? 27);
-    const weekRem = Math.round(currentUsage.weekly?.remaining_pct ?? (100 - weekUsed));
+    const weekRem = Math.round(currentUsage.weekly?.remaining_pct ?? (100 - Math.round(currentUsage.weekly?.used_pct ?? 0)));
+    const weekUsed = Math.round(currentUsage.weekly?.used_pct ?? (100 - weekRem));
+    const weekReset = currentUsage.weekly?.resets_in || 'Ready';
 
     const badgeSess = isRem ? sessRem : sessUsed;
     const badgeWeek = isRem ? weekRem : weekUsed;
 
-    // Smart status dot color based on active model quota health
-    const activeRemFraction = sessRem;
-    let quotaDotColor = theme.dotColor;
-    if (activeRemFraction <= 10) {
-      quotaDotColor = '#f43f5e'; // Red for critically low
-    } else if (activeRemFraction <= 25) {
-      quotaDotColor = '#fbbf24'; // Amber warning
+    const titleTooltip = `Gemini Quota HUD\n• 5-Hour: ${sessRem}% Remaining (${sessUsed}% Used) - Resets in: ${sessReset}\n• Weekly: ${weekRem}% Remaining (${weekUsed}% Used) - Resets in: ${weekReset}\nClick to view full HUD`;
+
+    const badgeSig = `${badgeSess}|${badgeWeek}|${theme.dotColor}|${theme.id}`;
+    if (badge.dataset.aqmSig !== badgeSig) {
+      badge.dataset.aqmSig = badgeSig;
+      badge.title = titleTooltip;
+      badge.innerHTML = `
+        <span style="width:5.5px;height:5.5px;border-radius:50%;background:${theme.dotColor};box-shadow:0 0 7px ${theme.dotColor};animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
+        <span dir="ltr">${badgeSess}%</span>
+        <span style="opacity:0.35;font-weight:400;margin:0 1px;">|</span>
+        <span style="opacity:0.85;font-size:10px;font-weight:600;" dir="ltr">W: ${badgeWeek}%</span>
+      `;
     }
 
-    const titleTooltip = `${activeModelTitle} HUD\n• 5-Hour: ${sessRem}% Remaining (${sessUsed}% Used)\n• Weekly: ${weekRem}% Remaining (${weekUsed}% Used)\n• Resets in: ${sessReset}\nClick to view full HUD`;
-
-    badge.title = titleTooltip;
-    badge.innerHTML = `
-      <span style="width:5.5px;height:5.5px;border-radius:50%;background:${quotaDotColor};box-shadow:0 0 7px ${quotaDotColor};animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
-      <span dir="ltr">${badgeSess}%</span>
-      <span style="opacity:0.35;font-weight:400;margin:0 1px;">|</span>
-      <span style="opacity:0.85;font-size:10px;font-weight:600;" dir="ltr">W: ${badgeWeek}%</span>
-    `;
-
-    pill.title = titleTooltip;
-    pill.innerHTML = `
-      <span style="width:5.5px;height:5.5px;border-radius:50%;background:${quotaDotColor};box-shadow:0 0 7px ${quotaDotColor};animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
-      <span class="${isRefreshing ? 'aqm-rotating' : ''}" style="color:${theme.id === 'pastel' ? '#ff70a6' : '#fbbf24'};display:flex;align-items:center;filter:drop-shadow(0 0 5px ${theme.id === 'pastel' ? 'rgba(255,112,166,0.6)' : 'rgba(251,191,36,0.6)'});">
-        ${theme.id === 'pastel' ? '🌸' : SVGS.lightning}
-      </span>
-      <span style="letter-spacing:-0.02em;" dir="ltr">${badgeSess}%</span>
-      <span style="opacity:0.75;font-size:10px;font-weight:500;font-family:${fontFa};">(${sessReset})</span>
-    `;
+    const pillSig = `${badgeSess}|${sessReset}|${isRefreshing}|${theme.dotColor}|${theme.id}`;
+    if (pill.dataset.aqmSig !== pillSig) {
+      pill.dataset.aqmSig = pillSig;
+      pill.title = titleTooltip;
+      pill.innerHTML = `
+        <span style="width:5.5px;height:5.5px;border-radius:50%;background:${theme.dotColor};box-shadow:0 0 7px ${theme.dotColor};animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
+        <span class="${isRefreshing ? 'aqm-rotating' : ''}" style="color:${theme.id === 'pastel' ? '#ff70a6' : '#fbbf24'};display:flex;align-items:center;filter:drop-shadow(0 0 5px ${theme.id === 'pastel' ? 'rgba(255,112,166,0.6)' : 'rgba(251,191,36,0.6)'});">
+          ${theme.id === 'pastel' ? '🌸' : SVGS.lightning}
+        </span>
+        <span style="letter-spacing:-0.02em;" dir="ltr">${badgeSess}%</span>
+        <span style="opacity:0.75;font-size:10px;font-weight:500;font-family:${fontFa};">(${sessReset})</span>
+      `;
+    }
 
     pill.onclick = togglePopover;
 
@@ -3545,25 +4351,73 @@
     accPill.style.cursor = 'pointer';
     accPill.style.userSelect = 'none';
     accPill.style.transition = 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)';
-    const accUser = swState.activeAccount || {};
-    const accEmail = accUser.email || currentUsage.email || 'developer@antigravity.ai';
-    const accName = getCleanUserDisplayName(accUser.name, accEmail);
-    const accAvatar = accUser.avatar || '';
-    const accTier = accUser.tier || 'Google AI Pro';
-    const accTierCode = (accUser.tier_code || 'pro').toLowerCase();
+    const isInst2 = isInstance2Window();
+    let designatedEmail = '';
+    try {
+      designatedEmail = localStorage.getItem('antigravity:account_email') || window.__antigravity_account || (swState.activeAccount && swState.activeAccount.email) || (currentUsage && currentUsage.email) || '';
+    } catch(e) {}
+    if (!designatedEmail) {
+      designatedEmail = isInst2 ? 'bombhub.apk@gmail.com' : 'madgod.cum@gmail.com';
+    }
+
+    let targetKey = designatedEmail;
+    if (swState.savedAccounts && !swState.savedAccounts[targetKey]) {
+      const matchKey = Object.keys(swState.savedAccounts).find(k => k.toLowerCase() === targetKey.toLowerCase());
+      if (matchKey) {
+        targetKey = matchKey;
+      } else if (isInst2) {
+        const foundKey = Object.keys(swState.savedAccounts).find(e => isAccount2(e));
+        if (foundKey) targetKey = foundKey;
+      }
+    }
+
+    const savedInfo = (swState.savedAccounts && swState.savedAccounts[targetKey]) || {};
+    let fallbackName = savedInfo.name || (targetKey ? (targetKey.split('@')[0].split('.')[0].charAt(0).toUpperCase() + targetKey.split('@')[0].split('.')[0].slice(1)) : (isInst2 ? 'Secondary' : 'Madgod'));
+    let fallbackAvatar = savedInfo.avatar || '';
+
+    let accUser = {
+      email: targetKey,
+      name: fallbackName,
+      avatar: fallbackAvatar,
+      tier: savedInfo.tier || 'Google AI Pro',
+      tier_code: savedInfo.tier_code || 'pro'
+    };
+
+    if (swState.activeAccount && swState.activeAccount.email && swState.activeAccount.email.toLowerCase() === targetKey.toLowerCase()) {
+      accUser = { ...accUser, ...swState.activeAccount };
+    } else if (currentUsage && currentUsage.email && currentUsage.email.toLowerCase() === targetKey.toLowerCase()) {
+      accUser = { ...accUser, ...currentUsage };
+    }
+
+    if (accUser.name && (accUser.name === 'Account 2' || accUser.name.toLowerCase() === 'user')) {
+      accUser.name = savedInfo.name || fallbackName;
+    }
+
+    let accEmail = targetKey;
+    let accName = accUser.name || fallbackName;
+    let accAvatar = accUser.avatar || fallbackAvatar;
+    let accTier = accUser.tier || 'Google AI Pro';
+    let accTierCode = (accUser.tier_code || 'pro').toLowerCase();
 
     const tierBadgeBg = accTierCode === 'ultra' ? 'linear-gradient(135deg, #ec4899, #8b5cf6)' : (accTierCode === 'pro' ? 'linear-gradient(135deg, rgba(245,158,11,0.25), rgba(217,119,6,0.35))' : 'rgba(148,163,184,0.15)');
     const tierBadgeColor = accTierCode === 'ultra' ? '#ffffff' : (accTierCode === 'pro' ? '#fbbf24' : '#94a3b8');
     const tierBadgeBorder = accTierCode === 'ultra' ? 'rgba(236,72,153,0.5)' : (accTierCode === 'pro' ? 'rgba(251,191,36,0.45)' : 'rgba(148,163,184,0.25)');
 
-    accPill.title = `اکانت فعال: ${accName} (${accTier})\nبرای سوئیچ اکانت یا جابجایی پروژه‌ها کلیک کنید`;
-    accPill.innerHTML = `
-      <span style="width:6px;height:6px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:aqm-pulse-dot 2s infinite ease-in-out;pointer-events:none;"></span>
-      ${accAvatar ? `<img src="${accAvatar}" style="width:17px;height:17px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,255,255,0.3);pointer-events:none;" />` : `<span style="font-size:11px;pointer-events:none;">⚡️</span>`}
-      <span style="letter-spacing:-0.01em;font-weight:700;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;" dir="ltr">${accName}</span>
-      <span style="font-size:9px;font-weight:800;padding:1px 6px;border-radius:9999px;background:${tierBadgeBg};color:${tierBadgeColor};border:1px solid ${tierBadgeBorder};text-transform:uppercase;letter-spacing:0.02em;pointer-events:none;">${accTierCode.toUpperCase()}</span>
-      <span style="font-size:8px;opacity:0.6;margin-left:1px;pointer-events:none;">▼</span>
-    `;
+    const initialChar = accName ? accName.charAt(0).toUpperCase() : (isInst2 ? 'B' : 'M');
+    const initialAvatarHtml = `<span style="width:17px;height:17px;border-radius:50%;background:${isInst2 ? 'linear-gradient(135deg, #0ea5e9, #38bdf8)' : 'linear-gradient(135deg, #4285f4, #9b72cb)'};display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:#fff;font-weight:800;pointer-events:none;">${initialChar}</span>`;
+
+    const accPillSig = `${accEmail}|${accName}|${accAvatar}|${accTierCode}|${theme.pillBg}`;
+    if (accPill.dataset.aqmSig !== accPillSig) {
+      accPill.dataset.aqmSig = accPillSig;
+      accPill.title = `اکانت فعال: ${accName} (${accTier})\nبرای سوئیچ اکانت یا جابجایی پروژه‌ها کلیک کنید`;
+      accPill.innerHTML = `
+        <span style="width:6px;height:6px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:aqm-pulse-dot 2s infinite ease-in-out;pointer-events:none;"></span>
+        ${accAvatar ? `<img src="${accAvatar}" style="width:17px;height:17px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,255,255,0.3);pointer-events:none;" onerror="this.style.display='none'" />` : initialAvatarHtml}
+        <span style="letter-spacing:-0.01em;font-weight:700;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;" dir="ltr">${accName}</span>
+        <span style="font-size:9px;font-weight:800;padding:1px 6px;border-radius:9999px;background:${tierBadgeBg};color:${tierBadgeColor};border:1px solid ${tierBadgeBorder};text-transform:uppercase;letter-spacing:0.02em;pointer-events:none;">${accTierCode.toUpperCase()}</span>
+        <span style="font-size:8px;opacity:0.6;margin-left:1px;pointer-events:none;">▼</span>
+      `;
+    }
 
     accPill.onclick = (e) => {
       if (e) {
@@ -3591,12 +4445,12 @@
   let isTaskRunning = false;
 
   function startActiveTaskPolling() {
-    if (activeTaskPollingInterval) return;
+    if (window.__aqm_task_interval) return;
     const pill = document.getElementById('antigravity-usage-pill');
     if (pill) pill.classList.add('aqm-task-active');
 
     refreshQuota();
-    activeTaskPollingInterval = setInterval(() => {
+    window.__aqm_task_interval = setInterval(() => {
       const stopBtn = document.querySelector('button[aria-label*="Stop execution"], button[aria-label*="Cancel"]');
       if (!stopBtn) {
         stopActiveTaskPolling();
@@ -3607,9 +4461,9 @@
   }
 
   function stopActiveTaskPolling() {
-    if (activeTaskPollingInterval) {
-      clearInterval(activeTaskPollingInterval);
-      activeTaskPollingInterval = null;
+    if (window.__aqm_task_interval) {
+      clearInterval(window.__aqm_task_interval);
+      window.__aqm_task_interval = null;
     }
     const pill = document.getElementById('antigravity-usage-pill');
     if (pill) pill.classList.remove('aqm-task-active');
@@ -3659,7 +4513,8 @@
   window.__setAntigravityTheme = (themeId) => {
     if (THEMES[themeId]) {
       currentThemeId = themeId;
-      persistSetting('antigravity:quota_theme', themeId);
+      try { localStorage.setItem('antigravity:quota_theme', themeId); } catch (e) {}
+      persistUserSettings({ theme: themeId });
       applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
       renderBadge();
       renderPopover();
@@ -3667,18 +4522,21 @@
   };
   window.__toggleFullAppTheming = (enabled) => {
     isFullAppThemingEnabled = !!enabled;
-    persistSetting('antigravity:full_app_theming', isFullAppThemingEnabled);
+    try { localStorage.setItem('antigravity:full_app_theming', String(isFullAppThemingEnabled)); } catch (e) {}
+    persistUserSettings({ fullTheming: isFullAppThemingEnabled });
     applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
     renderPopover();
   };
   window.__toggleAntigravityPrivacyMode = (enabled) => {
     isPrivacyMode = (typeof enabled === 'boolean') ? enabled : !isPrivacyMode;
-    persistSetting('antigravity:privacy_mode', isPrivacyMode);
+    try { localStorage.setItem('antigravity:privacy_mode', String(isPrivacyMode)); } catch (e) {}
+    persistUserSettings({ privacyMode: isPrivacyMode });
     renderPopover();
   };
   window.__setAntigravityFont = (en, fa) => {
-    if (en) { customFontEn = en; persistSetting('antigravity:custom_font_en', en); }
-    if (fa) { customFontFa = fa; persistSetting('antigravity:custom_font_fa', fa); }
+    if (en) { customFontEn = en; try { localStorage.setItem('antigravity:custom_font_en', en); } catch(e){} }
+    if (fa) { customFontFa = fa; try { localStorage.setItem('antigravity:custom_font_fa', fa); } catch(e){} }
+    persistUserSettings({ fontEn: customFontEn, fontFa: customFontFa });
     applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
     renderBadge();
     renderPopover();
@@ -3687,16 +4545,17 @@
     if (!name) return;
     if (!customImportedFonts.some(f => f.id.toLowerCase() === name.toLowerCase())) {
       customImportedFonts.push({ id: name, name, url, type });
-      persistSetting('antigravity:custom_imported_fonts', customImportedFonts);
+      try { localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(customImportedFonts)); } catch(e){}
     }
     if (url) injectImportedFontStyles();
     if (type === 'fa') {
       customFontFa = name;
-      persistSetting('antigravity:custom_font_fa', name);
+      try { localStorage.setItem('antigravity:custom_font_fa', name); } catch(e){}
     } else {
       customFontEn = name;
-      persistSetting('antigravity:custom_font_en', name);
+      try { localStorage.setItem('antigravity:custom_font_en', name); } catch(e){}
     }
+    persistUserSettings({ customImportedFonts, fontEn: customFontEn, fontFa: customFontFa });
     ensureFontLoaded(name);
     applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
     renderBadge();
@@ -3705,6 +4564,9 @@
 
   // Smart RTL Global API & Exports
   window.updateDir = updateDir;
+  window.openSwitcherModal = openSwitcherModal;
+  window.closeSwitcherModal = closeSwitcherModal;
+  window.renderSwitcherModal = renderSwitcherModal;
   window.setRTLActive = (active) => {
     rtlConfig.isRTL = !!active;
     saveRtlConfig();
@@ -3737,9 +4599,26 @@
   }
   ensureFontLoaded(customFontEn);
   ensureFontLoaded(customFontFa);
+  applyConversationIsolationFilter();
+  try {
+    let isoDebounce = null;
+    const isoObserver = new MutationObserver(() => {
+      if (!isInstance2Window()) return;
+      if (isoDebounce) return;
+      isoDebounce = setTimeout(() => {
+        isoDebounce = null;
+        applyConversationIsolationFilter();
+      }, 150);
+    });
+    isoObserver.observe(document.body, { childList: true, subtree: true });
+    setInterval(() => {
+      if (isInstance2Window()) applyConversationIsolationFilter();
+    }, 2000);
+  } catch(e) {}
   fetchStoredQuota().then(() => {
     renderBadge();
     refreshQuota();
+    applyConversationIsolationFilter();
   });
   renderBadge();
 })();

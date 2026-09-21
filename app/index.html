@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Antigravity Switcher & Migration Suite</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Ambient Liquid Glows -->
+  <div class="ambient-glow ambient-1"></div>
+  <div class="ambient-glow ambient-2"></div>
+
+  <div class="app-container">
+
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand-capsule">
+        <div class="logo-orb">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1 data-i18n="appName">Antigravity Switcher</h1>
+          <p data-i18n="appSubtitle">Multi-Account & Project Migration Suite</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <!-- Language Selector -->
+        <div class="lang-select-wrap">
+          <select id="langSelect" class="lang-select" onchange="changeLanguage(this.value)">
+            <option value="en">🇺🇸 EN</option>
+            <option value="fa">🇮🇷 فارسی</option>
+            <option value="zh">🇨🇳 中文</option>
+            <option value="es">🇪🇸 ES</option>
+          </select>
+          <span class="lang-chevron">▾</span>
+        </div>
+
+        <button class="btn btn-glass" onclick="logoutAndAddNew()" style="padding: 7px 12px; font-size: 12px;">
+          <span>➕</span>
+          <span data-i18n="addNewAccount">Add Account</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Hero: Active Account Card -->
+    <section class="liquid-card active-card">
+      <div class="active-card-top">
+        <div class="user-profile">
+          <div class="avatar-frame">
+            <img id="userAvatar" class="avatar-img" src="" alt="Avatar" style="display:none;" />
+            <div id="userAvatarPlaceholder" class="avatar-placeholder">A</div>
+            <div class="pulse-dot" title="Active Session"></div>
+          </div>
+          <div class="user-meta">
+            <h2>
+              <span id="userName">Active Session</span>
+              <span id="tierBadge" class="tier-badge pro">PRO</span>
+            </h2>
+            <p id="userEmail">Loading session...</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Quota Gauge -->
+      <div class="quota-box">
+        <div class="quota-box-header">
+          <span class="quota-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+            <span data-i18n="activeAccount">Active Quota</span>
+          </span>
+          <span id="quotaCountdown" class="quota-countdown">⏱ Resets in --</span>
+        </div>
+
+        <div class="liquid-progress-track">
+          <div id="quotaProgressFill" class="liquid-progress-fill" style="width: 0%;"></div>
+        </div>
+
+        <div class="quota-box-footer">
+          <span id="quotaUsedText">0% used</span>
+          <span id="quotaRemainingText">100% remaining</span>
+        </div>
+      </div>
+
+      <!-- Models Breakdown -->
+      <div class="models-grid" id="modelsGrid">
+        <!-- Injected via JavaScript -->
+      </div>
+
+      <!-- Hero Actions -->
+      <div class="btn-group-hero">
+        <button class="btn btn-primary" onclick="saveCurrentAccount()" style="flex:1;">
+          <span>💾</span>
+          <span data-i18n="saveCurrent">Save Current Account</span>
+        </button>
+        <button class="btn btn-glass" onclick="refreshLiveData()">
+          <span>🔄</span>
+          <span data-i18n="refreshQuota">Refresh</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Saved Accounts Section -->
+    <section>
+      <div class="section-head">
+        <h3 data-i18n="savedAccounts">Saved Accounts</h3>
+        <span id="accountsCountBadge" class="tier-badge free">0</span>
+      </div>
+
+      <div class="accounts-list" id="savedAccountsList">
+        <!-- Dynamically injected account cards -->
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <div>
+        <span data-i18n="author">Developed with precision by</span>
+        <a href="https://github.com/Madgod-xyz" target="_blank">Madgod-xyz</a>
+      </div>
+      <a href="https://github.com/Madgod-xyz/antigravity-account-switcher" target="_blank" data-i18n="githubNotice" style="font-size:11px; opacity:0.75;">
+        ★ Star on GitHub
+      </a>
+    </footer>
+
+  </div>
+
+  <!-- Project & Chat Migration Modal (iOS Liquid Sheet) -->
+  <div class="modal-overlay" id="migrationModal">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div>
+          <h2 data-i18n="migrateTitle">Project & Chat Migration Hub</h2>
+          <p data-i18n="migrateSubtitle" style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+            Transfer or clone agent conversations and brainstorm artifacts between accounts
+          </p>
+        </div>
+        <button class="modal-close-btn" onclick="closeMigrationModal()">✕</button>
+      </div>
+
+      <div class="modal-body">
+
+        <!-- Target Account Selection -->
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <label data-i18n="targetAccount" style="font-size:13px; font-weight:700;">Target Account</label>
+          <select id="modalTargetAccountSelect" class="lang-select" style="width:100%; border-radius:var(--radius-md); padding:10px 14px;">
+            <!-- Populated dynamically -->
+          </select>
+        </div>
+
+        <!-- Transfer Mode -->
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <label data-i18n="migrationMode" style="font-size:13px; font-weight:700;">Transfer Mode</label>
+          <div class="option-row">
+            <div class="radio-card selected" id="modeCopyCard" onclick="selectMigrationMode('copy')">
+              <span class="radio-card-title" data-i18n="modeCopy">Safe Copy (Keep in both)</span>
+              <span class="radio-card-desc" data-i18n="modeCopyDesc">Duplicates conversations and artifacts so you can continue work with new quota.</span>
+            </div>
+            <div class="radio-card" id="modeCutCard" onclick="selectMigrationMode('move')">
+              <span class="radio-card-title" data-i18n="modeCut">Cut & Move (Transfer)</span>
+              <span class="radio-card-desc" data-i18n="modeCutDesc">Moves projects completely to target account, cleaning up source.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Destination Structure -->
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <label data-i18n="structureMode" style="font-size:13px; font-weight:700;">Destination Layout</label>
+          <div class="option-row">
+            <div class="radio-card selected" id="structSeparateCard" onclick="selectStructureMode('separate')">
+              <span class="radio-card-title" data-i18n="structSeparate">Separate Pages & Projects</span>
+              <span class="radio-card-desc" data-i18n="structSeparateDesc">Keeps each conversation thread as an independent project.</span>
+            </div>
+            <div class="radio-card" id="structMergeCard" onclick="selectStructureMode('merge')">
+              <span class="radio-card-title" data-i18n="structMerge">Merge into Single Project</span>
+              <span class="radio-card-desc" data-i18n="structMergeDesc">Consolidates all selected conversations into a single timeline.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Continuous Dual-Sync Toggle -->
+        <div class="sync-toggle-card">
+          <div style="display:flex; flex-direction:column; gap:3px;">
+            <span class="radio-card-title" data-i18n="dualSyncTitle">Continuous Dual-Sync</span>
+            <span class="radio-card-desc" data-i18n="dualSyncDesc">Keep AI agent updates synchronized automatically across both accounts.</span>
+          </div>
+          <label class="ios-switch">
+            <input type="checkbox" id="dualSyncCheckbox">
+            <span class="ios-slider"></span>
+          </label>
+        </div>
+
+        <!-- Conversation Picker -->
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <label data-i18n="selectConversations" style="font-size:13px; font-weight:700;">Select Conversations</label>
+            <div style="display:flex; gap:8px;">
+              <button class="btn-glass" onclick="toggleSelectAllConversations(true)" style="padding:4px 8px; font-size:11px;" data-i18n="selectAll">Select All</button>
+              <button class="btn-glass" onclick="toggleSelectAllConversations(false)" style="padding:4px 8px; font-size:11px;" data-i18n="deselectAll">Deselect</button>
+            </div>
+          </div>
+          <input type="text" id="convSearchInput" class="lang-select" style="width:100%; border-radius:var(--radius-sm); padding:8px 12px; margin-bottom:4px;" placeholder="Search conversations or projects..." oninput="filterConversations(this.value)" />
+
+          <div class="conv-picker" id="conversationPickerList">
+            <!-- Populated dynamically with checkboxes -->
+          </div>
+        </div>
+
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-glass" onclick="closeMigrationModal()" data-i18n="cancel">Cancel</button>
+        <button class="btn btn-primary" id="startMigrationBtn" onclick="executeMigration()">
+          <span>🚀</span>
+          <span data-i18n="startMigration">Start Smart Migration</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

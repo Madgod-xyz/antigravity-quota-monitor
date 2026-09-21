@@ -1,11 +1,44 @@
-__pycache__/
-*.pyc
-*.log
+# Secrets and Credentials (NEVER COMMIT)
+*.token
+*.key
+*.pem
+manifest.json
+accounts/
+oauth_creds.json
+google_accounts.json
+
+# macOS system files
 .DS_Store
-HANDOFF_AND_BACKUP.md
-dev-tools/
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# App build cache
 *.tmp
-.env
-.env.*
-app/
-switcher_core.py
+*.log
+
+# Antigravity agent configuration
+GEMINI.md
+.agents/
+
+# Runtime manifests and dynamic state
+task_isolation_manifest.json
+profile_sync_manifest.json
+sync_manifest.json
+active_quota.json
+quota_history.json
+scratch*
+scratch_*.py
+quota_raw.json
+brag-output/

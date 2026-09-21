@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import json
+import socket
 import urllib.request
 import platform
 import subprocess
@@ -41,10 +42,6 @@ def log(msg):
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line)
             f.flush()
-    except Exception:
-        pass
-    try:
-        print(line, end="", flush=True)
     except Exception:
         pass
 
@@ -100,7 +97,6 @@ def get_platform_paths():
 
     global_quota = home / ".gemini" / "antigravity" / "active_quota.json"
     history = home / ".gemini" / "antigravity" / "quota_history.json"
-    user_settings = home / ".gemini" / "antigravity" / "user_settings.json"
 
     injector = CURRENT_DIR / "antigravity_quota_injector.js"
     if not injector.exists():
@@ -113,57 +109,206 @@ def get_platform_paths():
                 injector = c
                 break
 
-    return storage, devtools, global_quota, history, injector, user_settings
+    return storage, devtools, global_quota, history, injector
 
-STORAGE_PATH, DEVTOOLS_PORT_PATH, GLOBAL_QUOTA_PATH, HISTORY_PATH, INJECTOR_PATH, SETTINGS_PATH = get_platform_paths()
+STORAGE_PATH, DEVTOOLS_PORT_PATH, GLOBAL_QUOTA_PATH, HISTORY_PATH, INJECTOR_PATH = get_platform_paths()
+USER_SETTINGS_PATH = Path.home() / ".gemini" / "antigravity" / "user_settings.json"
+
+DEFAULT_USER_SETTINGS = {
+    "theme": "cyber",
+    "mode": "remaining",
+    "fullTheming": True,
+    "privacyMode": False,
+    "fontEn": "default",
+    "fontFa": "Vazirmatn",
+    "customImportedFonts": [],
+    "rtl": {
+        "enabled": True,
+        "align": "right",
+        "direction": "rtl",
+        "font": "Vazirmatn"
+    },
+    "lang": "fa"
+}
 
 def load_user_settings():
-    if SETTINGS_PATH.exists():
+    if USER_SETTINGS_PATH.exists():
         try:
-            with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
-                d = json.load(f)
-                if isinstance(d, dict):
-                    return d
+            with open(USER_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                res = dict(DEFAULT_USER_SETTINGS)
+                res.update(saved)
+                return res
         except Exception:
             pass
-    return {}
+    return dict(DEFAULT_USER_SETTINGS)
 
-def save_user_settings(new_settings):
+def save_user_settings(patch):
     try:
-        settings = load_user_settings()
-        settings.update(new_settings)
-        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2, ensure_ascii=False)
-        return True
+        cur = load_user_settings()
+        if isinstance(patch, dict):
+            cur.update(patch)
+        USER_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(USER_SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(cur, f, indent=2, ensure_ascii=False)
+        return True, cur
     except Exception as e:
-        log(f"[SETTINGS SAVE ERROR] {e}")
+        return False, str(e)
+
+def get_primary_account():
+    try:
+        man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
+        if man_path.exists():
+            with open(man_path, "r", encoding="utf-8") as f:
+                m = json.load(f)
+                if m:
+                    return list(m.keys())[0]
+    except Exception:
+        pass
+    return "primary_account"
+
+def get_secondary_account():
+    try:
+        man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
+        if man_path.exists():
+            with open(man_path, "r", encoding="utf-8") as f:
+                m = json.load(f)
+                if len(m) > 1:
+                    return list(m.keys())[1]
+    except Exception:
+        pass
+    return "secondary_account"
+
+PRIMARY_ACCOUNT = get_primary_account()
+SECONDARY_ACCOUNT = get_secondary_account()
+
+def is_account2(email):
+    if not email:
+        return False
+    norm = str(email).lower().strip()
+    if norm in ('instance_2', 'secondary_account') or 'account2' in norm:
+        return True
+    return norm != str(PRIMARY_ACCOUNT).lower().strip() and norm != 'madgod.cum@gmail.com'
+
+def get_instance_active_account(instance_id="instance_1"):
+    home = Path.home()
+    appdata = Path(os.getenv("APPDATA", str(home / "AppData" / "Roaming")))
+    saved_manifest = {}
+    man_path = home / ".gemini" / "accounts" / "manifest.json"
+    if man_path.exists():
+        try:
+            with open(man_path, "r", encoding="utf-8") as f:
+                saved_manifest = json.load(f)
+        except Exception:
+            pass
+
+    if instance_id == "instance_2":
+        f2 = home / ".gemini" / "accounts" / "active_instance_2.txt"
+        if f2.exists():
+            try:
+                acc = f2.read_text(encoding="utf-8").strip()
+                if acc and (not saved_manifest or acc in saved_manifest):
+                    return acc
+            except Exception:
+                pass
+        st2 = appdata / "Antigravity-Instance2" / "app_storage.json"
+        if st2.exists():
+            try:
+                with open(st2, "r", encoding="utf-8") as f:
+                    acc = json.load(f).get("antigravity:account_email")
+                    if acc and (not saved_manifest or acc in saved_manifest):
+                        return acc
+            except Exception:
+                pass
+        return next((k for k in saved_manifest if k != PRIMARY_ACCOUNT), SECONDARY_ACCOUNT)
+
+    # For instance_1:
+    f1 = home / ".gemini" / "accounts" / "active_instance_1.txt"
+    if f1.exists():
+        try:
+            acc = f1.read_text(encoding="utf-8").strip()
+            if acc and (not saved_manifest or acc in saved_manifest):
+                return acc
+        except Exception:
+            pass
+
+    st1 = appdata / "Antigravity" / "app_storage.json"
+    if st1.exists():
+        try:
+            with open(st1, "r", encoding="utf-8") as f:
+                acc = json.load(f).get("antigravity:account_email")
+                if acc and (not saved_manifest or acc in saved_manifest):
+                    return acc
+        except Exception:
+            pass
+
+    try:
+        tok = quota_engine.get_keychain_token()
+        if tok:
+            q = quota_engine.fetch_quota_and_tier(tok)
+            if q and q.get("email") and (not saved_manifest or q["email"] in saved_manifest):
+                return q["email"]
+    except Exception:
+        pass
+
+    return PRIMARY_ACCOUNT
+
+def is_port_open(port, host="127.0.0.1", timeout=0.5):
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except Exception:
         return False
 
-def get_devtools_port():
-    if not DEVTOOLS_PORT_PATH.exists():
-        return None
-    try:
-        with open(DEVTOOLS_PORT_PATH, "r", encoding="utf-8") as f:
-            lines = f.read().strip().split("\n")
-            if lines:
-                return int(lines[0])
-    except Exception:
-        return None
-    return None
+def get_devtools_targets():
+    home = Path.home()
+    appdata = Path(os.getenv("APPDATA", str(home / "AppData" / "Roaming")))
+    candidates = [
+        {"instance_id": "instance_1", "path": DEVTOOLS_PORT_PATH, "account": get_instance_active_account("instance_1")},
+        {"instance_id": "instance_2", "path": appdata / "Antigravity-Instance2" / "DevToolsActivePort", "account": get_instance_active_account("instance_2")}
+    ]
+    targets = []
+    for c in candidates:
+        p = c["path"]
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    lines = f.read().strip().split("\n")
+                    if lines:
+                        val = int(lines[0])
+                        if is_port_open(val):
+                            targets.append({
+                                "instance_id": c["instance_id"],
+                                "port": val,
+                                "default_account": c["account"]
+                            })
+            except Exception:
+                pass
+    return targets
 
+def get_all_devtools_ports():
+    return [t["port"] for t in get_devtools_targets()]
+
+def get_devtools_port():
+    targets = get_devtools_targets()
+    return targets[0]["port"] if targets else None
+
+_active_cdp_connections = {}  # {instance_id: {'ws': ws, 'port': port, 'account': account, 'loop': loop, 'instance_id': instance_id}}
+_cdp_conns_lock = threading.Lock()
 _active_cdp_ws = None
 _active_cdp_loop = None
 
-def get_injector_script(usage=None):
+def get_injector_script(usage=None, instance_id="instance_1", account_email=None):
     if not INJECTOR_PATH.exists():
         return ""
     try:
         with open(INJECTOR_PATH, "r", encoding="utf-8") as f:
             code = f.read()
 
-        usage_json = json.dumps(usage) if usage else "{}"
+        import migration_engine as m_eng
+        actual_account = account_email or get_instance_active_account(instance_id)
 
+        # Load manifest
         man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
         saved_accounts = {}
         if man_path.exists():
@@ -173,31 +318,70 @@ def get_injector_script(usage=None):
             except Exception:
                 pass
 
+        instance_usage = usage
+        if not instance_usage or not instance_usage.get("email"):
+            if actual_account in saved_accounts:
+                acc_entry = saved_accounts[actual_account]
+                clean_name = acc_entry.get("name") or (actual_account.split('@')[0].split('.')[0].capitalize() if '@' in str(actual_account) else "User")
+                rem_pct = acc_entry.get("remaining_pct", 100.0)
+                instance_usage = {
+                    "email": actual_account,
+                    "name": clean_name,
+                    "tier": acc_entry.get("tier", "Google AI Pro"),
+                    "tier_code": acc_entry.get("tier_code", "pro"),
+                    "session": {"name": "Gemini Models", "used_pct": round(100.0 - float(rem_pct), 1), "remaining_pct": round(float(rem_pct), 1), "resets_in": "Ready"}
+                }
+        elif instance_id == "instance_2" and actual_account and instance_usage.get("email") != actual_account:
+            if actual_account in saved_accounts:
+                acc_entry = saved_accounts[actual_account]
+                clean_name = acc_entry.get("name") or (actual_account.split('@')[0].split('.')[0].capitalize() if '@' in str(actual_account) else "User")
+                rem_pct = acc_entry.get("remaining_pct", 100.0)
+                instance_usage = {
+                    "email": actual_account,
+                    "name": clean_name,
+                    "tier": acc_entry.get("tier", "Google AI Pro"),
+                    "tier_code": acc_entry.get("tier_code", "pro"),
+                    "session": {"name": "Gemini Models", "used_pct": round(100.0 - float(rem_pct), 1), "remaining_pct": round(float(rem_pct), 1), "resets_in": "Ready"}
+                }
+
+        usage_json = json.dumps(instance_usage or {}, ensure_ascii=False)
+        allowed_convs = m_eng.get_allowed_conversations(actual_account) if hasattr(m_eng, 'get_allowed_conversations') else []
+
         accounts_payload = json.dumps({
-            "activeAccount": usage,
-            "savedAccounts": saved_accounts
+            "activeAccount": instance_usage,
+            "savedAccounts": saved_accounts,
+            "allowedConversations": allowed_convs,
+            "instanceId": instance_id
         }, ensure_ascii=False)
         saved_manifest_json = json.dumps(saved_accounts, ensure_ascii=False)
-
-        user_settings = load_user_settings()
-        user_settings_json = json.dumps(user_settings, ensure_ascii=False)
+        allowed_convs_json = json.dumps(allowed_convs, ensure_ascii=False)
+        user_settings_json = json.dumps(load_user_settings(), ensure_ascii=False)
 
         return (
             "(() => {\n"
+            f"  window.__antigravity_instance = {json.dumps(instance_id)};\n"
+            f"  window.__antigravity_account = {json.dumps(actual_account)};\n"
             f"  window.__antigravity_quota = {usage_json};\n"
             f"  window.__antigravity_accounts = {accounts_payload};\n"
-            f"  window.__antigravity_settings = {user_settings_json};\n"
+            f"  window.__antigravity_user_settings = {user_settings_json};\n"
+            "  try {\n"
+            "    const __s = window.__antigravity_user_settings || {};\n"
+            "    if (__s.theme) localStorage.setItem('antigravity:quota_theme', __s.theme);\n"
+            "    if (__s.mode) localStorage.setItem('antigravity:quota_mode', __s.mode);\n"
+            "    if (__s.fullTheming !== undefined) localStorage.setItem('antigravity:full_app_theming', String(__s.fullTheming));\n"
+            "    if (__s.privacyMode !== undefined) localStorage.setItem('antigravity:privacy_mode', String(__s.privacyMode));\n"
+            "    if (__s.fontEn) localStorage.setItem('antigravity:custom_font_en', __s.fontEn);\n"
+            "    if (__s.fontFa) localStorage.setItem('antigravity:custom_font_fa', __s.fontFa);\n"
+            "    if (__s.lang) localStorage.setItem('antigravity:switcher_lang', __s.lang);\n"
+            "    if (__s.rtl) localStorage.setItem('antigravity:rtl_config', typeof __s.rtl === 'string' ? __s.rtl : JSON.stringify(__s.rtl));\n"
+            "    if (__s.customImportedFonts) localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(__s.customImportedFonts));\n"
+            "    if (__s.popoverPos) localStorage.setItem('antigravity:popover_pos', JSON.stringify(__s.popoverPos));\n"
+            "  } catch(e) {}\n"
+            f"  try {{ localStorage.setItem('antigravity:instance_id', {json.dumps(instance_id)}); }} catch(e) {{}}\n"
+            f"  try {{ localStorage.setItem('antigravity:account_email', {json.dumps(actual_account)}); }} catch(e) {{}}\n"
+            f"  try {{ localStorage.setItem('antigravity:allowed_conversations', {allowed_convs_json}); }} catch(e) {{}}\n"
             "  try { localStorage.setItem('antigravity:active_quota', JSON.stringify(window.__antigravity_quota)); } catch(e) {}\n"
             f"  try {{ localStorage.setItem('antigravity:accounts_manifest', JSON.stringify({saved_manifest_json})); }} catch(e) {{}}\n"
-            "  try {\n"
-            "    if (window.__antigravity_settings && typeof window.__antigravity_settings === 'object') {\n"
-            "      for (const [k, v] of Object.entries(window.__antigravity_settings)) {\n"
-            "        if (v !== undefined && v !== null) {\n"
-            "          localStorage.setItem(k, typeof v === 'object' ? JSON.stringify(v) : String(v));\n"
-            "        }\n"
-            "      }\n"
-            "    }\n"
-            "  } catch(e) {}\n"
             + code + "\n"
             "  if (typeof window.__renderAntigravityBadge === 'function') window.__renderAntigravityBadge();\n"
             "})();\n"
@@ -205,19 +389,20 @@ def get_injector_script(usage=None):
     except Exception:
         return ""
 
-def inject_badge_via_devtools(port, usage=None):
-    global _active_cdp_ws, _active_cdp_loop
-    if _active_cdp_ws and _active_cdp_loop:
+def inject_badge_via_devtools(port, usage=None, instance_id="instance_1", account_email=None):
+    with _cdp_conns_lock:
+        conn = _active_cdp_connections.get(instance_id)
+    if conn and conn.get("ws") and conn.get("loop"):
         try:
-            script = get_injector_script(usage)
+            script = get_injector_script(usage, instance_id=instance_id, account_email=account_email or conn.get("account"))
             if script:
                 asyncio.run_coroutine_threadsafe(
-                    _active_cdp_ws.send(json.dumps({
+                    conn["ws"].send(json.dumps({
                         "id": int(time.time() * 1000) % 1000000,
                         "method": "Runtime.evaluate",
                         "params": {"expression": script}
                     })),
-                    _active_cdp_loop
+                    conn["loop"]
                 )
         except Exception:
             pass
@@ -233,6 +418,11 @@ def sync_quota_once(force=False, inject=False):
         if not force and _cached_usage and (now - _last_sync_time < 3.0):
             return _cached_usage
 
+        # If a dual instance launch is currently swapping credentials temporarily, do not read from keychain!
+        import server as srv_mod
+        if getattr(srv_mod, 'is_dual_launching', lambda: False)():
+            return _cached_usage or {}
+
         usage = quota_engine.fetch_quota()
         if not usage or not usage.get("session"):
             return _cached_usage or {}
@@ -245,6 +435,8 @@ def sync_quota_once(force=False, inject=False):
             if STORAGE_PATH.exists():
                 with open(STORAGE_PATH, "r", encoding="utf-8") as f:
                     storage_data = json.load(f)
+            if usage.get("email"):
+                storage_data["antigravity:account_email"] = usage["email"]
             storage_data["antigravity:active_quota"] = json.dumps(usage)
             STORAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
             with open(STORAGE_PATH, "w", encoding="utf-8") as f:
@@ -267,14 +459,14 @@ def sync_quota_once(force=False, inject=False):
         return usage
 
 _oauth_lock = threading.Lock()
-_active_oauth = {'running': False, 'auth_url': '', 'start_time': 0}
+_active_oauth = {'running': False, 'auth_url': '', 'start_time': 0, 'target': None}
 
-def start_shared_oauth_flow():
+def start_shared_oauth_flow(target_account=None):
     global _active_oauth
     with _oauth_lock:
         now = time.time()
-        if _active_oauth['running'] and (now - _active_oauth['start_time'] < 120) and _active_oauth['auth_url']:
-            log("[OAUTH] Reusing currently active OAuth session...")
+        if _active_oauth['running'] and (now - _active_oauth['start_time'] < 120) and _active_oauth['auth_url'] and (_active_oauth.get('target') == target_account):
+            log(f"[OAUTH] Reusing currently active OAuth session for target '{target_account}'...")
             try:
                 import server as srv_mod
                 srv_mod.open_browser_url(_active_oauth['auth_url'])
@@ -285,6 +477,7 @@ def start_shared_oauth_flow():
         _active_oauth['running'] = True
         _active_oauth['auth_url'] = ''
         _active_oauth['start_time'] = now
+        _active_oauth['target'] = target_account
 
     try:
         import server as srv_mod
@@ -292,7 +485,7 @@ def start_shared_oauth_flow():
     except Exception:
         pass
 
-    log("[OAUTH] Starting Google In-Browser OAuth flow...")
+    log(f"[OAUTH] Starting Google In-Browser OAuth flow for target: {target_account or 'any'}...")
     auth_url_holder = []
 
     def _on_url(u):
@@ -339,7 +532,7 @@ def start_shared_oauth_flow():
 
     def _run():
         import server as srv_mod
-        srv_mod.run_google_oauth_flow(on_url=_on_url, on_complete=_done)
+        srv_mod.run_google_oauth_flow(target_account=target_account, on_url=_on_url, on_complete=_done)
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -350,6 +543,57 @@ def start_shared_oauth_flow():
         time.sleep(0.08)
 
     return auth_url_holder[0] if auth_url_holder else ""
+
+def get_account_profile_data(account_email, manifest=None, force_refresh=False):
+    if manifest is None:
+        try:
+            import server as srv
+            manifest = srv.load_manifest()
+        except Exception:
+            manifest = {}
+
+    target = account_email or PRIMARY_ACCOUNT
+    entry = manifest.get(target, {})
+    name = entry.get("name") or entry.get("label") or (target.split('@')[0].split('.')[0].capitalize() if target else "User")
+    avatar = entry.get("avatar", "")
+    tier = entry.get("tier", "Google AI Pro")
+    tier_code = entry.get("tier_code", "pro")
+    remaining_pct = entry.get("remaining_pct", 100)
+
+    acc_data = {
+        "email": target,
+        "name": name,
+        "avatar": avatar,
+        "tier": tier,
+        "tier_code": tier_code,
+        "session": {
+            "name": "Gemini 3.8 Flash High",
+            "used_pct": round(100 - remaining_pct, 1),
+            "remaining_pct": remaining_pct,
+            "resets_in": "4 hr"
+        }
+    }
+
+    if not force_refresh and entry.get("quota") and isinstance(entry["quota"], dict):
+        acc_data.update(entry["quota"])
+        if avatar and not acc_data.get("avatar"):
+            acc_data["avatar"] = avatar
+        return acc_data
+
+    tf = entry.get("token_file")
+    if tf and os.path.exists(tf):
+        try:
+            with open(tf, 'r', encoding='utf-8') as f_tok:
+                tok_str = f_tok.read().strip()
+            q = quota_engine.fetch_quota_and_tier(tok_str, force_refresh=force_refresh)
+            if q and isinstance(q, dict) and q.get("email") == target:
+                acc_data.update(q)
+                if avatar and not acc_data.get("avatar"):
+                    acc_data["avatar"] = avatar
+        except Exception:
+            pass
+
+    return acc_data
 
 class QuotaHttpHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
@@ -362,9 +606,38 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            import server as srv_mod
             if self.path.startswith('/sync') or self.path.startswith('/quota'):
+                import urllib.parse
+                parsed = urllib.parse.urlparse(self.path)
+                q_params = urllib.parse.parse_qs(parsed.query)
+                req_inst = q_params.get('instance', [None])[0]
                 force = 'force' in self.path
-                usage = sync_quota_once(force=force, inject=False)
+                if req_inst == 'instance_2':
+                    target_acc = get_instance_active_account("instance_2")
+                    sec_path = Path.home() / ".gemini" / "antigravity" / "active_quota_instance_2.json"
+                    usage = None
+                    if force:
+                        usage = get_account_profile_data(target_acc, force_refresh=True)
+                        if usage:
+                            try:
+                                with open(sec_path, "w", encoding="utf-8") as f:
+                                    json.dump(usage, f, indent=2)
+                            except Exception:
+                                pass
+                    if not usage and sec_path.exists():
+                        try:
+                            with open(sec_path, "r", encoding="utf-8") as f:
+                                usage = json.load(f)
+                        except Exception:
+                            pass
+                    if not usage or usage.get("email") != target_acc:
+                        usage = get_account_profile_data(target_acc, force_refresh=True)
+                else:
+                    target_acc = get_instance_active_account("instance_1")
+                    usage = sync_quota_once(force=force, inject=False)
+                    if not usage or usage.get("email") != target_acc:
+                        usage = get_account_profile_data(target_acc, force_refresh=force)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -399,40 +672,37 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                 self.send_header('Connection', 'close')
                 self.end_headers()
                 self.wfile.write(b'{"status":"opened"}')
-            elif self.path in ('/api/state', '/api/accounts'):
+            elif self.path.startswith('/api/state') or self.path.startswith('/api/accounts'):
                 # Return active account, saved accounts manifest, and conversations
+                import urllib.parse
+                parsed_url = urllib.parse.urlparse(self.path)
+                query_params = urllib.parse.parse_qs(parsed_url.query)
+                req_inst = query_params.get('instance', [None])[0]
+                req_acc = query_params.get('account', [None])[0]
+
                 resp_data = {'activeAccount': None, 'savedAccounts': {}, 'conversations': []}
                 try:
-                    import quota_engine as q_eng
+                    import server as srv
                     import migration_engine as m_eng
-                    global _cached_account_info, _cached_account_time
-                    now = time.time()
-                    force = 'force=true' in self.path.lower()
-                    if not force and '_cached_account_info' in globals() and _cached_account_info and (now - _cached_account_time < 30):
-                        resp_data['activeAccount'] = _cached_account_info
-                    elif GLOBAL_QUOTA_PATH.exists():
-                        try:
-                            with open(GLOBAL_QUOTA_PATH, 'r', encoding='utf-8') as f_q:
-                                resp_data['activeAccount'] = json.load(f_q)
-                                _cached_account_info = resp_data['activeAccount']
-                                _cached_account_time = now
-                        except Exception:
-                            pass
-                    elif hasattr(q_eng, 'fetch_quota_and_tier'):
-                        _cached_account_info = q_eng.fetch_quota_and_tier()
-                        _cached_account_time = now
-                        resp_data['activeAccount'] = _cached_account_info
+                    manifest = srv.load_manifest()
+                    resp_data['savedAccounts'] = manifest
+
+                    if req_inst == 'instance_2':
+                        target_acc = req_acc or get_instance_active_account("instance_2")
+                    else:
+                        target_acc = req_acc or get_instance_active_account("instance_1")
+
+                    resp_data['activeAccount'] = get_account_profile_data(target_acc, manifest)
+                    resp_data['instanceId'] = req_inst or 'instance_1'
                     resp_data['conversations'] = m_eng.list_conversations() if hasattr(m_eng, 'list_conversations') else []
+                    resp_data['projects'] = m_eng.list_projects() if hasattr(m_eng, 'list_projects') else []
+                    resp_data['tasks'] = m_eng.list_scheduled_tasks(account=target_acc) if hasattr(m_eng, 'list_scheduled_tasks') else []
+                    resp_data['allowedConversations'] = {
+                        'instance_1': m_eng.get_allowed_conversations('instance_1') if hasattr(m_eng, 'get_allowed_conversations') else [],
+                        'instance_2': m_eng.get_allowed_conversations('instance_2') if hasattr(m_eng, 'get_allowed_conversations') else []
+                    }
                 except Exception as e:
                     pass
-                
-                man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
-                if man_path.exists():
-                    try:
-                        with open(man_path, 'r', encoding='utf-8') as f:
-                            resp_data['savedAccounts'] = json.load(f)
-                    except Exception:
-                        pass
 
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -453,19 +723,55 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                 self.send_header('Connection', 'close')
                 self.end_headers()
                 self.wfile.write(json.dumps(convs, ensure_ascii=False).encode('utf-8'))
-            elif self.path in ('/api/settings', '/api/user_settings'):
-                settings = load_user_settings()
+            elif self.path == '/api/projects':
+                projects = []
+                try:
+                    import migration_engine as m_eng
+                    projects = m_eng.list_projects()
+                except Exception:
+                    pass
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.send_header('Connection', 'close')
                 self.end_headers()
-                self.wfile.write(json.dumps(settings, ensure_ascii=False).encode('utf-8'))
+                self.wfile.write(json.dumps(projects, ensure_ascii=False).encode('utf-8'))
+            elif self.path == '/api/tasks':
+                tasks = []
+                try:
+                    import migration_engine as m_eng
+                    tasks = m_eng.list_scheduled_tasks()
+                except Exception:
+                    pass
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(json.dumps(tasks, ensure_ascii=False).encode('utf-8'))
+            elif self.path.startswith('/api/settings'):
+                s = load_user_settings()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(json.dumps(s, ensure_ascii=False).encode('utf-8'))
+            elif self.path == '/api/dual_status':
+                running = srv_mod.is_instance2_running() if hasattr(srv_mod, 'is_instance2_running') else False
+                payload = {'instance2_running': running}
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(json.dumps(payload, ensure_ascii=False).encode('utf-8'))
             else:
                 self.send_response(404)
                 self.send_header('Connection', 'close')
                 self.end_headers()
-        except Exception:
+        except Exception as e:
+            log(f"[HTTP GET ERROR] {e}")
             try:
                 self.send_response(500)
                 self.send_header('Connection', 'close')
@@ -514,6 +820,12 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
             elif self.path == '/api/save':
                 resp = srv_mod.save_current_account()
                 _cached_account_info = None
+            elif self.path == '/api/launch_dual':
+                ak = data.get('accountKey')
+                p_path = data.get('projectPath')
+                log(f"[HTTP LAUNCH DUAL] Request received for account: {ak}, project: {p_path}")
+                resp = srv_mod.launch_dual_instance(ak, project_path=p_path)
+                log(f"[HTTP LAUNCH DUAL RESULT] {resp}")
             elif self.path == '/api/import':
                 resp = srv_mod.import_token(data.get('token', ''))
                 _cached_account_info = None
@@ -528,8 +840,12 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                     srv_mod.save_manifest(m)
                     resp = {'success': True}
                 _cached_account_info = None
+            elif self.path.startswith('/api/settings'):
+                ok, res = save_user_settings(data)
+                resp = {'success': ok, 'settings': res}
             elif self.path == '/api/oauth_signin':
-                auth_url = start_shared_oauth_flow()
+                tgt_acc = data.get('accountKey') or data.get('email')
+                auth_url = start_shared_oauth_flow(target_account=tgt_acc)
                 resp = {'success': True, 'auth_url': auth_url}
             elif self.path == '/api/migrate':
                 import migration_engine as m_eng
@@ -539,15 +855,56 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                     data.get('targetAccount'),
                     mode=data.get('mode', 'copy'),
                     structure=data.get('structure', 'separate'),
-                    dual_sync=data.get('dualSync', False)
+                    dual_sync=data.get('dualSync', False),
+                    project_id=data.get('projectId')
                 )
-            elif self.path in ('/api/save_setting', '/api/settings', '/save_settings'):
-                if isinstance(data, dict):
-                    if "key" in data and "value" in data:
-                        save_user_settings({data["key"]: data["value"]})
-                    else:
-                        save_user_settings(data)
-                resp = {'success': True}
+            elif self.path == '/api/project_assign':
+                import migration_engine as m_eng
+                resp = m_eng.set_project_assignment(
+                    data.get('projectId'),
+                    data.get('accounts') or data.get('account', []),
+                    sync_mode=data.get('syncMode', 'shared'),
+                    enabled=data.get('enabled')
+                )
+            elif self.path == '/api/project_sync':
+                import migration_engine as m_eng
+                resp = m_eng.sync_project_to_account(
+                    data.get('projectId'),
+                    data.get('targetAccount'),
+                    include_conversations=data.get('includeConversations', False)
+                )
+            elif self.path == '/api/project_unlink':
+                import migration_engine as m_eng
+                resp = m_eng.unlink_project_from_account(
+                    data.get('projectId'),
+                    data.get('account')
+                )
+            elif self.path == '/api/task_isolate':
+                import migration_engine as m_eng
+                resp = m_eng.set_task_isolation(
+                    data.get('taskName') or data.get('name'),
+                    data.get('ownerAccount') or PRIMARY_ACCOUNT,
+                    isolate_from_account2=data.get('isolateFromAccount2', data.get('isolate', True)),
+                    allowed_instances=data.get('allowedInstances'),
+                    requesting_account=data.get('account') or data.get('callerAccount')
+                )
+            elif self.path == '/api/task_toggle':
+                import migration_engine as m_eng
+                resp = m_eng.toggle_task_state(
+                    data.get('taskName') or data.get('name'),
+                    enable=data.get('enable', data.get('enabled', True)),
+                    requesting_account=data.get('account') or data.get('callerAccount')
+                )
+            elif self.path == '/api/conversation_assign':
+                import migration_engine as m_eng
+                resp = m_eng.assign_conversation_account(
+                    data.get('conversationId'),
+                    data.get('account'),
+                    action=data.get('action', 'add')
+                )
+            
+            if isinstance(resp, dict) and resp.get('success'):
+                broadcast_all_instances()
         except Exception as e:
             resp = {'success': False, 'error': str(e)}
 
@@ -566,33 +923,44 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
 
 def start_http_server(port=39281):
     ThreadingHTTPServer.allow_reuse_address = True
-    for attempt in range(6):
+    for attempt in range(40):
         try:
             server = ThreadingHTTPServer(('127.0.0.1', port), QuotaHttpHandler)
             server.daemon_threads = True
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [INFO] HTTP server successfully listening on port {port}", flush=True)
+            log(f"[INFO] HTTP server successfully listening on port {port}")
             server.serve_forever()
             break
         except Exception as e:
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [WARN] HTTP server bind attempt {attempt+1} failed: {e}", flush=True)
+            log(f"[WARN] HTTP server bind attempt {attempt+1}/40 failed: {e}")
             time.sleep(1.5)
 
 
-async def cdp_broadcast_state(ws, extra_toast=None):
+async def cdp_broadcast_state(ws, extra_toast=None, instance_id="instance_1", account_email=None):
     try:
         import server as srv
         import migration_engine as m_eng
         manifest = srv.load_manifest()
-        token = quota_engine.get_keychain_token()
-        active_acc = None
-        if token:
-            active_acc = quota_engine.fetch_quota_and_tier(token)
+
+        target_account = account_email or get_instance_active_account(instance_id)
+        if target_account not in manifest:
+            target_account = PRIMARY_ACCOUNT
+
+        actual_account = target_account
+        active_acc = get_account_profile_data(target_account, manifest)
+
         conversations = m_eng.list_conversations() if hasattr(m_eng, 'list_conversations') else []
+        projects = m_eng.list_projects() if hasattr(m_eng, 'list_projects') else []
+        tasks = m_eng.list_scheduled_tasks(account=actual_account) if hasattr(m_eng, 'list_scheduled_tasks') else []
+        allowed_convs = m_eng.get_allowed_conversations(actual_account) if hasattr(m_eng, 'get_allowed_conversations') else []
 
         payload = json.dumps({
             "activeAccount": active_acc,
             "savedAccounts": manifest,
-            "conversations": conversations
+            "conversations": conversations,
+            "projects": projects,
+            "tasks": tasks,
+            "allowedConversations": allowed_convs,
+            "instanceId": instance_id
         }, ensure_ascii=False)
 
         toast_js = ""
@@ -602,7 +970,12 @@ async def cdp_broadcast_state(ws, extra_toast=None):
             toast_js = f"if (typeof window.__showSwitcherToast === 'function') window.__showSwitcherToast({msg}, {is_err});"
 
         eval_script = f"""(() => {{
+            window.__antigravity_instance = {json.dumps(instance_id)};
+            window.__antigravity_account = {json.dumps(actual_account)};
             window.__antigravity_accounts = {payload};
+            try {{ localStorage.setItem('antigravity:instance_id', {json.dumps(instance_id)}); }} catch(e) {{}}
+            try {{ localStorage.setItem('antigravity:account_email', {json.dumps(actual_account)}); }} catch(e) {{}}
+            try {{ localStorage.setItem('antigravity:allowed_conversations', JSON.stringify({json.dumps(allowed_convs)})); }} catch(e) {{}}
             try {{ localStorage.setItem('antigravity:accounts_manifest', JSON.stringify({json.dumps(manifest, ensure_ascii=False)})); }} catch(e) {{}}
             if (typeof window.__onSwitcherStateUpdate === 'function') {{
                 window.__onSwitcherStateUpdate(window.__antigravity_accounts);
@@ -616,18 +989,31 @@ async def cdp_broadcast_state(ws, extra_toast=None):
             "params": {"expression": eval_script}
         }))
     except Exception as e:
-        print(f"[CDP STATE ERROR] {e}", flush=True)
+        print(f"[CDP STATE ERROR] [{instance_id}] {e}", flush=True)
 
-async def cdp_handle_action(ws, action, data):
+def broadcast_all_instances(extra_toast=None):
+    with _cdp_conns_lock:
+        conns = list(_active_cdp_connections.values())
+    for c in conns:
+        try:
+            if c.get("ws") and c.get("loop"):
+                asyncio.run_coroutine_threadsafe(
+                    cdp_broadcast_state(c["ws"], extra_toast=extra_toast, instance_id=c.get("instance_id", "instance_1"), account_email=c.get("account")),
+                    c["loop"]
+                )
+        except Exception:
+            pass
+
+async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_account=None):
     try:
         import server as srv
         import migration_engine as m_eng
-        log(f"[CDP IPC ACTION] {action}")
+        log(f"[CDP IPC ACTION] [{instance_id}] {action}")
         if action == "getState":
-            await cdp_broadcast_state(ws)
+            await cdp_broadcast_state(ws, instance_id=instance_id, account_email=default_account)
         elif action == "save":
             res = srv.save_current_account()
-            await cdp_broadcast_state(ws, {
+            broadcast_all_instances({
                 "msg": "اکانت فعلی با موفقیت ذخیره شد" if res.get("success") else (res.get("error") or "خطا در ذخیره اکانت"),
                 "isErr": not res.get("success")
             })
@@ -641,7 +1027,7 @@ async def cdp_handle_action(ws, action, data):
                 global _cached_account_info, _cached_account_time
                 _cached_account_info = quota_d
                 _cached_account_time = time.time()
-                await cdp_broadcast_state(ws, {
+                broadcast_all_instances({
                     "msg": f"حساب به {acc_key} تغییر یافت. در حال راه‌اندازی مجدد...",
                     "isErr": False
                 })
@@ -650,24 +1036,42 @@ async def cdp_handle_action(ws, action, data):
                         time.sleep(0.8)
                         srv.restart_antigravity()
                     threading.Thread(target=do_restart, daemon=True).start()
-            else:
-                await cdp_broadcast_state(ws, {"msg": res.get("error") or "خطا در جابجایی حساب", "isErr": True})
+            if not res.get("success"):
+                if res.get("needs_reauth"):
+                    start_shared_oauth_flow(target_account=target_key)
+                await cdp_broadcast_state(ws, {"msg": res.get("error") or "خطا در جابجایی حساب", "isErr": True}, instance_id=instance_id, account_email=default_account)
         elif action == "import":
             tok = (data.get("token") or "").replace("\r", "").replace("\n", "").strip()
             res = srv.import_token(tok)
-            await cdp_broadcast_state(ws, {
+            broadcast_all_instances({
                 "msg": f"اکانت {res.get('email', '')} با موفقیت افزوده شد" if res.get("success") else (res.get("error") or "خطا در ثبت توکن"),
                 "isErr": not res.get("success")
             })
         elif action == "delete":
             ak = data.get("accountKey")
             res = srv.delete_account(ak)
-            await cdp_broadcast_state(ws, {
+            broadcast_all_instances({
                 "msg": "اکانت از لیست حذف شد" if res.get("success") else (res.get("error") or "خطا در حذف"),
                 "isErr": not res.get("success")
             })
+        elif action == "launch_dual":
+            ak = data.get("accountKey")
+            p_path = data.get("projectPath")
+            log(f"[CDP LAUNCH DUAL] Request received for account: {ak}, project: {p_path}")
+            res = srv.launch_dual_instance(ak, project_path=p_path)
+            log(f"[CDP LAUNCH DUAL RESULT] {res}")
+            display_name = ak or "اکانت دوم"
+            success = res.get("success", False)
+            if res.get("needs_reauth"):
+                start_shared_oauth_flow(target_account=ak)
+            msg = res.get("msg") or (f"پنجره دوم با اکانت {display_name} اجرا شد" if success else (res.get("error") or "خطا در اجرای پنجره دوم"))
+            broadcast_all_instances({
+                "msg": msg,
+                "isErr": not success
+            })
         elif action == "oauth_signin":
-            start_shared_oauth_flow()
+            tgt = data.get("accountKey") or data.get("email")
+            start_shared_oauth_flow(target_account=tgt)
         elif action == "migrate":
             conv_ids = data.get("conversationIds", [])
             src = data.get("sourceAccount", "")
@@ -675,74 +1079,125 @@ async def cdp_handle_action(ws, action, data):
             mode = data.get("mode", "copy")
             struct = data.get("structure", "separate")
             dual = data.get("dualSync", False)
-            res = m_eng.migrate_conversations(conv_ids, src, tgt, mode=mode, structure=struct, dual_sync=dual)
-            await cdp_broadcast_state(ws, {
+            p_id = data.get("projectId")
+            res = m_eng.migrate_conversations(conv_ids, src, tgt, mode=mode, structure=struct, dual_sync=dual, project_id=p_id)
+            broadcast_all_instances({
                 "msg": f"انتقال {res.get('migrated_count', 0)} گفتگو با موفقیت انجام شد" if res.get("success") else (res.get("error") or "خطا در انتقال"),
                 "isErr": not res.get("success")
             })
-        elif action in ("save_setting", "save_settings"):
-            key = data.get("key")
-            val = data.get("value")
-            if key:
-                save_user_settings({key: val})
-            settings_dict = data.get("settings")
-            if isinstance(settings_dict, dict):
-                save_user_settings(settings_dict)
+        elif action == "assignProject":
+            p_id = data.get("projectId")
+            accs = data.get("accounts") or data.get("account", [])
+            enb = data.get("enabled")
+            sm = data.get("syncMode", "shared")
+            res = m_eng.set_project_assignment(p_id, accs, sync_mode=sm, enabled=enb)
+            broadcast_all_instances({
+                "msg": "تنظیمات دسترسی پروژه بروزرسانی شد" if res.get("success") else (res.get("error") or "خطا در تخصیص پروژه"),
+                "isErr": not res.get("success")
+            })
+        elif action == "syncProject":
+            p_id = data.get("projectId")
+            tgt = data.get("targetAccount") or SECONDARY_ACCOUNT
+            inc_c = data.get("includeConversations", False)
+            res = m_eng.sync_project_to_account(p_id, tgt, include_conversations=inc_c)
+            broadcast_all_instances({
+                "msg": f"پروژه با موفقیت به {tgt} سینک شد" if res.get("success") else (res.get("error") or "خطا در سینک پروژه"),
+                "isErr": not res.get("success")
+            })
+        elif action == "unlinkProject":
+            p_id = data.get("projectId")
+            acc = data.get("account") or SECONDARY_ACCOUNT
+            res = m_eng.unlink_project_from_account(p_id, acc)
+            broadcast_all_instances({
+                "msg": f"پروژه با موفقیت از {acc} جدا شد" if res.get("success") else (res.get("error") or "خطا در جداسازی پروژه"),
+                "isErr": not res.get("success")
+            })
+        elif action == "isolateTask":
+            t_name = data.get("taskName") or data.get("name")
+            owner = data.get("ownerAccount") or PRIMARY_ACCOUNT
+            iso = data.get("isolateFromAccount2", data.get("isolate", True))
+            insts = data.get("allowedInstances")
+            req_acc = SECONDARY_ACCOUNT if instance_id == "instance_2" else (data.get("account") or data.get("callerAccount") or default_account)
+            res = m_eng.set_task_isolation(t_name, owner, isolate_from_account2=iso, allowed_instances=insts, requesting_account=req_acc)
+            broadcast_all_instances({
+                "msg": f"ایزولاسیون تسک {t_name} اعمال شد" if res.get("success") else (res.get("error") or "خطا در ایزولاسیون تسک"),
+                "isErr": not res.get("success")
+            })
+        elif action == "toggleTask":
+            t_name = data.get("taskName") or data.get("name")
+            enb = data.get("enable", data.get("enabled", True))
+            acc = SECONDARY_ACCOUNT if instance_id == "instance_2" else (data.get("account") or data.get("callerAccount") or default_account)
+            res = m_eng.toggle_task_state(t_name, enable=enb, requesting_account=acc)
+            broadcast_all_instances({
+                "msg": res.get("msg") or res.get("error") or "وضعیت تسک تغییر کرد",
+                "isErr": not res.get("success")
+            })
+        elif action == "assignConversation":
+            c_id = data.get("conversationId")
+            acc = data.get("account")
+            act = data.get("action", "add")
+            res = m_eng.assign_conversation_account(c_id, acc, action=act)
+            broadcast_all_instances({
+                "msg": "تخصیص گفتگو بروزرسانی شد" if res.get("success") else "خطا در تخصیص گفتگو",
+                "isErr": not res.get("success")
+            })
+        elif action in ["save_user_settings", "saveSettings"]:
+            ok, res = save_user_settings(data)
+            log(f"[SETTINGS] Saved user settings via CDP: {ok}")
     except Exception as e:
-        log(f"[CDP ACTION ERROR] {e}")
+        log(f"[CDP ACTION ERROR] [{instance_id}] {e}")
 
-async def cdp_session_loop():
-    global _active_cdp_ws, _active_cdp_loop
-    _active_cdp_loop = asyncio.get_running_loop()
+async def cdp_instance_worker(instance_id, port, default_account):
+    loop = asyncio.get_running_loop()
     import server as srv
-    while True:
-        try:
-            port = get_devtools_port()
-            if not port:
-                await asyncio.sleep(2)
-                continue
+    log(f"[CDP] Starting worker for {instance_id} on port {port}")
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/json/list")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            targets = json.loads(resp.read().decode())
 
-            req = urllib.request.Request(f"http://127.0.0.1:{port}/json/list")
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                targets = json.loads(resp.read().decode())
+        page = next((t for t in targets if t.get("type") == "page" and "about:blank" not in t.get("url", "")), None)
+        if not page:
+            page = next((t for t in targets if t.get("type") == "page"), None)
+        if not page or not page.get("webSocketDebuggerUrl"):
+            return
 
-            page = next((t for t in targets if t.get("type") == "page" and "about:blank" not in t.get("url", "")), None)
-            if not page:
-                page = next((t for t in targets if t.get("type") == "page"), None)
-            if not page or not page.get("webSocketDebuggerUrl"):
-                await asyncio.sleep(2)
-                continue
+        ws_url = page["webSocketDebuggerUrl"]
+        log(f"[CDP] [{instance_id}] Connecting to {ws_url}")
 
-            ws_url = page["webSocketDebuggerUrl"]
-            log(f"[CDP] Connecting to {ws_url}")
+        async with websockets.connect(ws_url, ping_interval=None, ping_timeout=None) as ws:
+            with _cdp_conns_lock:
+                _active_cdp_connections[instance_id] = {
+                    "ws": ws,
+                    "port": port,
+                    "account": default_account,
+                    "loop": loop,
+                    "instance_id": instance_id
+                }
 
-            async with websockets.connect(ws_url, ping_interval=None, ping_timeout=None) as ws:
-                _active_cdp_ws = ws
-                await ws.send(json.dumps({"id": 1, "method": "Runtime.enable"}))
-                await ws.send(json.dumps({"id": 2, "method": "Page.enable"}))
-                await ws.send(json.dumps({"id": 3, "method": "DOMStorage.enable"}))
-                await ws.send(json.dumps({"id": 4, "method": "Runtime.addBinding", "params": {"name": "__aqm_daemon_ipc"}}))
-                
-                # Injects the script for new documents
-                init_script = get_injector_script(_cached_usage)
-                if init_script:
-                    await ws.send(json.dumps({
-                        "id": 5,
-                        "method": "Page.addScriptToEvaluateOnNewDocument",
-                        "params": {"source": init_script}
-                    }))
-                    await ws.send(json.dumps({
-                        "id": 6,
-                        "method": "Runtime.evaluate",
-                        "params": {"expression": init_script}
-                    }))
+            await ws.send(json.dumps({"id": 1, "method": "Runtime.enable"}))
+            await ws.send(json.dumps({"id": 2, "method": "Page.enable"}))
+            await ws.send(json.dumps({"id": 3, "method": "DOMStorage.enable"}))
+            await ws.send(json.dumps({"id": 4, "method": "Runtime.addBinding", "params": {"name": "__aqm_daemon_ipc"}}))
 
-                log("[CDP] __aqm_daemon_ipc bound successfully.")
+            init_script = get_injector_script(_cached_usage, instance_id=instance_id, account_email=default_account)
+            if init_script:
+                await ws.send(json.dumps({
+                    "id": 5,
+                    "method": "Page.addScriptToEvaluateOnNewDocument",
+                    "params": {"source": init_script}
+                }))
+                await ws.send(json.dumps({
+                    "id": 6,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": init_script}
+                }))
 
-                # Broadcast initial state
-                await cdp_broadcast_state(ws)
+            log(f"[CDP] [{instance_id}] __aqm_daemon_ipc bound and scripts injected.")
 
-                # Auto-save current account if newly logged in
+            await cdp_broadcast_state(ws, instance_id=instance_id, account_email=default_account)
+
+            if instance_id == "instance_1" and not getattr(srv, 'is_dual_launching', lambda: False)():
                 token = quota_engine.get_keychain_token()
                 if token:
                     m = srv.load_manifest()
@@ -751,64 +1206,160 @@ async def cdp_session_loop():
                     if email and email not in m:
                         log(f"[AUTO-SAVE] Saving newly active account {email}")
                         srv.save_current_account()
-                        await cdp_broadcast_state(ws)
+                        await cdp_broadcast_state(ws, instance_id=instance_id, account_email=default_account)
 
-                async for msg in ws:
-                    try:
-                        d = json.loads(msg)
-                        method = d.get("method")
-                        if method == "Runtime.bindingCalled" and d.get("params", {}).get("name") == "__aqm_daemon_ipc":
-                            payload_raw = d.get("params", {}).get("payload", "{}")
-                            payload = json.loads(payload_raw)
-                            action = payload.get("action")
-                            if action:
-                                await cdp_handle_action(ws, action, payload)
+            async for msg in ws:
+                try:
+                    d = json.loads(msg)
+                    method = d.get("method")
+                    if method == "Runtime.bindingCalled" and d.get("params", {}).get("name") == "__aqm_daemon_ipc":
+                        payload_raw = d.get("params", {}).get("payload", "{}")
+                        payload = json.loads(payload_raw)
+                        action = payload.get("action")
+                        if action:
+                            await cdp_handle_action(ws, action, payload, instance_id=instance_id, default_account=default_account)
 
-                        elif method in ("DOMStorage.domStorageItemAdded", "DOMStorage.domStorageItemUpdated"):
-                            params = d.get("params", {})
-                            if params.get("key") == "antigravity:switcher_command":
-                                try:
-                                    val = json.loads(params.get("newValue", "{}"))
-                                    action = val.get("action")
-                                    if action:
-                                        await cdp_handle_action(ws, action, val)
-                                except Exception:
-                                    pass
+                    elif method in ("DOMStorage.domStorageItemAdded", "DOMStorage.domStorageItemUpdated"):
+                        params = d.get("params", {})
+                        if params.get("key") == "antigravity:switcher_command":
+                            try:
+                                val = json.loads(params.get("newValue", "{}"))
+                                action = val.get("action")
+                                if action:
+                                    await cdp_handle_action(ws, action, val, instance_id=instance_id, default_account=default_account)
+                            except Exception:
+                                pass
 
-                        elif method in ("Page.loadEventFired", "Page.frameNavigated"):
-                            # Re-bind on reload
-                            await ws.send(json.dumps({"id": 100, "method": "Runtime.addBinding", "params": {"name": "__aqm_daemon_ipc"}}))
-                            nav_script = get_injector_script(_cached_usage)
-                            if nav_script:
-                                await ws.send(json.dumps({
-                                    "id": 101,
-                                    "method": "Runtime.evaluate",
-                                    "params": {"expression": nav_script}
-                                }))
-                            # Auto-save newly active account
-                            token = quota_engine.get_keychain_token()
-                            if token:
-                                m = srv.load_manifest()
-                                acc_info = quota_engine.fetch_quota_and_tier(token)
-                                email = acc_info.get("email") if acc_info else None
-                                if email and email not in m:
-                                    log(f"[AUTO-SAVE] Saving newly active account {email}")
-                                    srv.save_current_account()
-                            await cdp_broadcast_state(ws)
-                    except Exception as e:
-                        log(f"[CDP MSG ERROR] {e}")
+                    elif method in ("Page.loadEventFired", "Page.frameNavigated"):
+                        await ws.send(json.dumps({"id": 100, "method": "Runtime.addBinding", "params": {"name": "__aqm_daemon_ipc"}}))
+                        nav_script = get_injector_script(_cached_usage, instance_id=instance_id, account_email=default_account)
+                        if nav_script:
+                            await ws.send(json.dumps({
+                                "id": 101,
+                                "method": "Runtime.evaluate",
+                                "params": {"expression": nav_script}
+                            }))
+                        await cdp_broadcast_state(ws, instance_id=instance_id, account_email=default_account)
+                except Exception as e:
+                    log(f"[CDP MSG ERROR] [{instance_id}] {e}")
 
+    except Exception as e:
+        log(f"[CDP WORKER ERROR] [{instance_id}] {e}")
+    finally:
+        with _cdp_conns_lock:
+            _active_cdp_connections.pop(instance_id, None)
+        log(f"[CDP WORKER CLOSED] [{instance_id}]")
+
+async def cdp_supervisor_loop():
+    running_tasks = {}
+    while True:
+        try:
+            targets = get_devtools_targets()
+            for inst_id, task in list(running_tasks.items()):
+                if task.done():
+                    running_tasks.pop(inst_id, None)
+
+            for tgt in targets:
+                inst_id = tgt["instance_id"]
+                if inst_id not in running_tasks or running_tasks[inst_id].done():
+                    task = asyncio.create_task(
+                        cdp_instance_worker(inst_id, tgt["port"], tgt["default_account"])
+                    )
+                    running_tasks[inst_id] = task
         except Exception as e:
-            _active_cdp_ws = None
-            log(f"[CDP RECONNECT] {e}")
-            await asyncio.sleep(2)
+            log(f"[CDP SUPERVISOR ERROR] {e}")
+
+        await asyncio.sleep(2)
 
 def start_cdp_supervisor():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(cdp_session_loop())
+    loop.run_until_complete(cdp_supervisor_loop())
+
+def kill_other_daemon_instances():
+    try:
+        import psutil
+        my_pid = os.getpid()
+        for p in psutil.process_iter(['pid', 'name', 'cmdline']):
+            if p.info['pid'] == my_pid:
+                continue
+            cmd = p.info.get('cmdline') or []
+            cmd_str = " ".join(cmd).lower()
+            if 'sync_daemon.py' in cmd_str and ('python' in (p.info.get('name') or '').lower()):
+                try:
+                    p.terminate()
+                    p.wait(timeout=2)
+                except Exception:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+def refresh_all_accounts_tokens():
+    try:
+        accounts_dir = Path.home() / ".gemini" / "accounts"
+        if not accounts_dir.exists():
+            return
+        manifest_p = accounts_dir / "manifest.json"
+        manifest = {}
+        if manifest_p.exists():
+            try:
+                with open(manifest_p, 'r', encoding='utf-8') as mf:
+                    manifest = json.load(mf)
+            except Exception:
+                pass
+
+        updated_manifest = False
+        for tf in accounts_dir.glob("*.token"):
+            try:
+                with open(tf, 'r', encoding='utf-8') as f:
+                    t_str = f.read().strip()
+                if not t_str:
+                    continue
+                acc_name = tf.stem
+                
+                # Verify token email matches account name
+                tok_email = quota_engine.extract_token_email(t_str)
+                if tok_email and tok_email.lower().strip() != acc_name.lower().strip():
+                    log(f"[SYNC WARNING] Token in {tf.name} belongs to '{tok_email}', NOT '{acc_name}'. Skipping and flagging reauth.")
+                    if acc_name in manifest:
+                        manifest[acc_name]['needs_reauth'] = True
+                        manifest[acc_name]['token_file'] = ''
+                        updated_manifest = True
+                    continue
+
+                fresh_str = quota_engine.ensure_fresh_token(t_str, account_email=acc_name)
+                # Fetch updated quota
+                q = quota_engine.fetch_quota_and_tier(fresh_str, force_refresh=True)
+                if q and acc_name in manifest:
+                    sess = q.get('session') or {}
+                    rem = sess.get('remaining_pct')
+                    week = q.get('weekly') or {}
+                    week_rem = week.get('remaining_pct')
+                    if rem is not None:
+                        manifest[acc_name]['remaining_pct'] = float(rem)
+                    if week_rem is not None:
+                        manifest[acc_name]['weekly_remaining_pct'] = float(week_rem)
+                    if week.get('resets_in'):
+                        manifest[acc_name]['weekly_resets_in'] = week.get('resets_in')
+                    manifest[acc_name]['saved_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+                    updated_manifest = True
+            except Exception:
+                pass
+
+        if updated_manifest and manifest_p.exists():
+            try:
+                with open(manifest_p, 'w', encoding='utf-8') as mf:
+                    json.dump(manifest, mf, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 def daemon_loop():
+    kill_other_daemon_instances()
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [INFO] Antigravity Quota Monitor on-demand daemon active.", flush=True)
     # Start on-demand local HTTP server
     t = threading.Thread(target=start_http_server, daemon=True)
@@ -818,6 +1369,12 @@ def daemon_loop():
     t_cdp = threading.Thread(target=start_cdp_supervisor, daemon=True)
     t_cdp.start()
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [CDP] Native CDP supervisor thread started.", flush=True)
+
+    # Refresh tokens for all saved accounts on startup
+    try:
+        refresh_all_accounts_tokens()
+    except Exception:
+        pass
 
     # Initial sync & injection
     try:
@@ -834,17 +1391,16 @@ def daemon_loop():
         time.sleep(3)
         now = time.time()
 
-        # 1. Detect if Antigravity is open, changed port, or restarted
+        # 1. Detect if Antigravity instances are open, changed port, or restarted
         try:
-            port = get_devtools_port()
-            if port:
-                # If port changed, or first time seeing port, or periodic verify every 30 seconds
-                if (port != last_injected_port) or (now - last_verify_time > 30):
+            targets = get_devtools_targets()
+            if targets:
+                if (targets != last_injected_port) or (now - last_verify_time > 30):
                     last_verify_time = now
-                    last_injected_port = port
-                    # Inject without heavy Google OAuth call if usage is already cached
+                    last_injected_port = targets
                     if _cached_usage:
-                        inject_badge_via_devtools(port, _cached_usage)
+                        for tgt in targets:
+                            inject_badge_via_devtools(tgt["port"], _cached_usage, instance_id=tgt["instance_id"], account_email=tgt["default_account"])
                     else:
                         sync_quota_once(force=True, inject=True)
             else:
@@ -852,12 +1408,13 @@ def daemon_loop():
         except Exception:
             pass
 
-        # 2. Passive keepalive heartbeat every 15 minutes (900 seconds)
+        # 2. Passive keepalive heartbeat and token refresh every 15 minutes (900 seconds)
         if now - last_heartbeat_time >= 900:
             last_heartbeat_time = now
             try:
+                refresh_all_accounts_tokens()
                 sync_quota_once(force=False)
-                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [HEARTBEAT] Passive quota heartbeat.", flush=True)
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [HEARTBEAT] Passive quota heartbeat and account tokens refreshed.", flush=True)
             except Exception:
                 pass
 
