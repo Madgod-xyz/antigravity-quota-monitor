@@ -694,18 +694,34 @@ def fetch_quota():
     if not data:
         return None
     session = data.get('session') or {}
+    weekly = data.get('weekly')
+    # If weekly is missing or defaulted to 100%, check if pools has real model-specific weekly quota
+    if not weekly or (weekly.get('remaining_pct', 100.0) >= 99.9 and data.get('pools')):
+        for p in data.get('pools', []):
+            w_rem = p.get('weekly_rem')
+            if w_rem is not None and float(w_rem) < 99.9:
+                weekly = {
+                    'name': 'Weekly Limit',
+                    'remaining_pct': float(w_rem),
+                    'used_pct': round(100.0 - float(w_rem), 1),
+                    'resets_in': p.get('weekly_resets') or 'Ready'
+                }
+                break
+    if not weekly:
+        weekly = {
+            'name': 'Weekly Limit',
+            'remaining_pct': session.get('remaining_pct', 100.0),
+            'used_pct': session.get('used_pct', 0.0),
+            'resets_in': 'Ready'
+        }
     return {
         'email': data.get('email', 'Unknown'),
         'name': data.get('name', 'User'),
         'avatar': data.get('avatar', ''),
-        'tier': data.get('tier', 'Free'),
-        'tier_code': data.get('tier_code', 'free'),
+        'tier': data.get('tier', 'Google AI Pro'),
+        'tier_code': data.get('tier_code', 'pro'),
         'session': session,
-        'weekly': {
-            'remaining_pct': session.get('remaining_pct', 95.0),
-            'used_pct': session.get('used_pct', 5.0),
-            'resets_in': '4 days, 12 hours'
-        },
+        'weekly': weekly,
         'pools': data.get('pools', [])
     }
 

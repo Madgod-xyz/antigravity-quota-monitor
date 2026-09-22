@@ -526,38 +526,22 @@ def launch_dual_instance(account_key, project_path=None):
                 'msg': f'پنجره حساب {account_key} فعال شد'
             }
 
-        # Deterministic primary token resolution
-        primary_token = None
-        active_email = ""
-        active_quota_file = Path.home() / ".gemini" / "antigravity" / "active_quota.json"
-        if active_quota_file.exists():
+        # Deterministic primary token resolution: Prioritize live keychain token
+        primary_token = quota_engine.get_keychain_token()
+        active_email = quota_engine.extract_token_email(primary_token) if primary_token else ""
+        if not active_email:
             try:
-                with open(active_quota_file, 'r', encoding='utf-8') as aqf:
-                    aq_data = json.load(aqf)
-                    if aq_data.get('email'):
-                        active_email = aq_data['email']
+                import sync_daemon
+                active_email = sync_daemon.get_instance_active_account("instance_1")
             except Exception:
                 pass
 
-        if active_email in manifest and os.path.exists(manifest[active_email].get('token_file', '')):
+        if not primary_token and active_email and active_email in manifest and os.path.exists(manifest[active_email].get('token_file', '')):
             try:
                 with open(manifest[active_email]['token_file'], 'r', encoding='utf-8') as pf:
                     primary_token = pf.read().strip()
             except Exception:
                 pass
-
-        if not primary_token:
-            for k, v in manifest.items():
-                if k != account_key and os.path.exists(v.get('token_file', '')):
-                    try:
-                        with open(v['token_file'], 'r', encoding='utf-8') as pf:
-                            primary_token = pf.read().strip()
-                            break
-                    except Exception:
-                        pass
-
-        if not primary_token:
-            primary_token = quota_engine.get_keychain_token()
 
         if sys_name == 'windows':
             target_inst_dir.mkdir(parents=True, exist_ok=True)

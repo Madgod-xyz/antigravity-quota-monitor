@@ -3492,12 +3492,23 @@
                     const assigned = (p.assigned_accounts || []).map(a => String(a).toLowerCase().trim());
                     const isAll = !!p.enabled_all || (savedKeys.length > 0 && savedKeys.every(k => assigned.includes(k.toLowerCase())));
                     const isNone = !!p.disabled_all || assigned.length === 0;
+                    const docTitle = (typeof document !== 'undefined' && document.title) ? document.title : '';
+                    const titleParts = docTitle.split(' - ');
+                    const currentFolder = titleParts.length >= 2 ? titleParts[titleParts.length - 2].trim().toLowerCase() : '';
+                    const isCurrentWindowProject = Boolean(currentFolder && (
+                      (p.name && p.name.toLowerCase() === currentFolder) ||
+                      (p.id && p.id.toLowerCase() === currentFolder) ||
+                      (p.path && p.path.toLowerCase().replace(/\\/g, '/').endsWith('/' + currentFolder))
+                    ));
                     return `
-                      <div class="aqm-sw-card" style="padding:10px 14px;display:flex;flex-direction:column;gap:8px;">
+                      <div class="aqm-sw-card" style="padding:10px 14px;display:flex;flex-direction:column;gap:8px;${isCurrentWindowProject ? 'border:1px solid rgba(56,189,248,0.45);box-shadow:0 0 10px rgba(56,189,248,0.15);background:rgba(56,189,248,0.03);' : ''}">
                         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
                           <div style="flex:1;min-width:0;">
-                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap;">
                               <span style="font-size:12.5px;font-weight:700;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.name || p.id}</span>
+                              ${isCurrentWindowProject ? `
+                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(56,189,248,0.2);color:#38bdf8;border:1px solid rgba(56,189,248,0.5);font-weight:700;">★ ${isFa ? 'پروژه جاری' : 'Active Window'}</span>
+                              ` : ''}
                               ${isNone ? `
                                 <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);">${isFa ? 'غیرفعال' : 'Disabled'}</span>
                               ` : isAll ? `
@@ -4154,7 +4165,10 @@
         const acc = btn.getAttribute('data-acc');
         showSwitcherToast(isFa ? `تنظیم حساب کسر سهمیه به ${acc}...` : `Setting quota account to ${acc}...`);
         if (callDaemonIpc('setProjectQuotaAccount', { projectId: pid, account: acc })) {
-          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
+          setTimeout(() => {
+            fetchSwitcherState(() => renderSwitcherModal());
+            if (typeof refreshQuota === 'function') refreshQuota();
+          }, 350);
           return;
         }
         fetch('http://127.0.0.1:39281/api/project_set_quota_account', {
@@ -4167,6 +4181,7 @@
           if (res && res.success) {
             showSwitcherToast(isFa ? `حساب کسر سهمیه به ${acc} تنظیم شد` : `Quota account updated to ${acc}`);
             fetchSwitcherState(() => renderSwitcherModal());
+            if (typeof refreshQuota === 'function') refreshQuota();
           }
         }).catch(() => {
           showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
@@ -4297,7 +4312,10 @@
         const acc = btn.getAttribute('data-acc');
         showSwitcherToast(isFa ? `تنظیم حساب کسر سهمیه به ${acc}...` : `Setting quota account to ${acc}...`);
         if (callDaemonIpc('setTaskQuotaAccount', { taskName: tname, account: acc })) {
-          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
+          setTimeout(() => {
+            fetchSwitcherState(() => renderSwitcherModal());
+            if (typeof refreshQuota === 'function') refreshQuota();
+          }, 350);
           return;
         }
         fetch('http://127.0.0.1:39281/api/task_set_quota_account', {
@@ -4310,6 +4328,7 @@
           if (res && res.success) {
             showSwitcherToast(isFa ? `حساب کسر سهمیه تسک به ${acc} تنظیم شد` : `Task quota account updated to ${acc}`);
             fetchSwitcherState(() => renderSwitcherModal());
+            if (typeof refreshQuota === 'function') refreshQuota();
           }
         }).catch(() => {
           showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);

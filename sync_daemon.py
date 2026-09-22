@@ -548,8 +548,10 @@ def sync_quota_once(force=False, inject=False):
     global _cached_usage, _last_sync_time
     now = time.time()
     with _sync_lock:
+        cur_active = get_instance_active_account("instance_1")
         if not force and _cached_usage and (now - _last_sync_time < 3.0):
-            return _cached_usage
+            if _cached_usage.get("email", "").lower().strip() == str(cur_active).lower().strip():
+                return _cached_usage
 
         # If a dual instance launch is currently swapping credentials temporarily, do not read from keychain!
         import server as srv_mod
@@ -719,7 +721,7 @@ def get_account_profile_data(account_email, manifest=None, force_refresh=False):
             with open(tf, 'r', encoding='utf-8') as f_tok:
                 tok_str = f_tok.read().strip()
             q = quota_engine.fetch_quota_and_tier(tok_str, force_refresh=force_refresh)
-            if q and isinstance(q, dict) and q.get("email") == target:
+            if q and isinstance(q, dict) and str(q.get("email")).lower().strip() == str(target).lower().strip():
                 acc_data.update(q)
                 if avatar and not acc_data.get("avatar"):
                     acc_data["avatar"] = avatar
@@ -1023,10 +1025,17 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                 )
             elif self.path == '/api/project_set_quota_account':
                 import migration_engine as m_eng
+                tgt_acc = data.get('account') or data.get('quotaAccount')
                 resp = m_eng.set_project_quota_account(
                     data.get('projectId'),
-                    data.get('account') or data.get('quotaAccount')
+                    tgt_acc
                 )
+                if resp.get('success') and tgt_acc:
+                    try:
+                        import server as srv_mod
+                        srv_mod.switch_account(tgt_acc, no_restart=True)
+                    except Exception as e:
+                        log(f"[API ERROR] switch_account on set_project_quota_account: {e}")
             elif self.path == '/api/task_set_quota_account':
                 import migration_engine as m_eng
                 resp = m_eng.set_task_quota_account(
@@ -1127,9 +1136,12 @@ async def cdp_broadcast_state(ws, extra_toast=None, instance_id="instance_1", ac
         import migration_engine as m_eng
         manifest = srv.load_manifest()
 
-        target_account = account_email or get_instance_active_account(instance_id)
-        if target_account not in manifest:
-            target_account = PRIMARY_ACCOUNT
+        target_account = get_instance_active_account(instance_id) or account_email
+        if not target_account or target_account not in manifest:
+            target_account = get_primary_account()
+        with _cdp_conns_lock:
+            if instance_id in _active_cdp_connections:
+                _active_cdp_connections[instance_id]["account"] = target_account
 
         actual_account = target_account
         active_acc = get_account_profile_data(target_account, manifest)
@@ -1303,6 +1315,12 @@ async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_
             p_id = data.get("projectId")
             acc = data.get("account") or data.get("quotaAccount")
             res = m_eng.set_project_quota_account(p_id, acc)
+            if res.get("success") and acc:
+                try:
+                    import server as srv_mod
+                    srv_mod.switch_account(acc, no_restart=True)
+                except Exception as e:
+                    log(f"[CDP ERROR] switch_account on setProjectQuotaAccount: {e}")
             broadcast_all_instances({
                 "msg": f"حساب کسر سهمیه پروژه به {acc} تنظیم شد" if res.get("success") else "خطا در تنظیم حساب سهمیه",
                 "isErr": not res.get("success")
