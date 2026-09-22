@@ -3528,9 +3528,29 @@
                           </div>
                         </div>
 
+                        <!-- Quota Source Payer Selector -->
+                        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 0 4px 0;border-top:1px solid rgba(255,255,255,0.06);">
+                          <span style="font-size:10px;font-weight:700;color:#38bdf8;display:inline-flex;align-items:center;gap:3px;margin-left:2px;">
+                            <span>💳</span>
+                            <span>${isFa ? 'کسر سهمیه از:' : 'Quota Payer:'}</span>
+                          </span>
+                          <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                            ${savedKeys.map(k => {
+                              const isQuotaSource = (p.quota_account && p.quota_account.toLowerCase() === k.toLowerCase()) || (!p.quota_account && k.toLowerCase() === (assigned[0] || savedKeys[0]).toLowerCase());
+                              const accShort = getCleanUserDisplayName(swState.savedAccounts[k]?.name, k);
+                              return `
+                                <button class="aqm-proj-quota-chip" data-pid="${p.id}" data-acc="${k}" data-active="${isQuotaSource}" title="${isFa ? `کسر سهمیه این پروژه از حساب ${k}` : `Deduct quota for this project from ${k}`}" style="padding:2px 8px;border-radius:9999px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.15s ease;display:inline-flex;align-items:center;gap:4px;background:${isQuotaSource ? 'rgba(56,189,248,0.22)' : 'rgba(255,255,255,0.04)'};color:${isQuotaSource ? '#38bdf8' : '#94a3b8'};border:1px solid ${isQuotaSource ? 'rgba(56,189,248,0.6)' : 'rgba(255,255,255,0.08)'};box-shadow:${isQuotaSource ? '0 0 8px rgba(56,189,248,0.25)' : 'none'};">
+                                  <span>${isQuotaSource ? '✓' : '○'}</span>
+                                  <span>${accShort}</span>
+                                </button>
+                              `;
+                            }).join('')}
+                          </div>
+                        </div>
+
                         <!-- Account Assignment Chips Matrix -->
-                        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-top:4px;border-top:1px solid rgba(255,255,255,0.05);">
-                          <span style="font-size:10px;color:#64748b;margin-left:2px;">${isFa ? 'تخصیص اکانت:' : 'Assign:'}</span>
+                        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-top:4px;">
+                          <span style="font-size:10px;color:#64748b;margin-left:2px;">${isFa ? 'دسترسی مجاز:' : 'Access:'}</span>
                           ${savedKeys.map(k => {
                             const isAssigned = assigned.includes(k.toLowerCase()) || (assigned.includes('instance_1') && k === savedKeys[0]);
                             const accShort = getCleanUserDisplayName(swState.savedAccounts[k]?.name, k);
@@ -3616,9 +3636,29 @@
                           </div>
                         </div>
 
+                        <!-- Quota Source Payer Selector -->
+                        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 0 4px 0;border-top:1px solid rgba(255,255,255,0.06);">
+                          <span style="font-size:10px;font-weight:700;color:#38bdf8;display:inline-flex;align-items:center;gap:3px;margin-left:2px;">
+                            <span>💳</span>
+                            <span>${isFa ? 'کسر سهمیه از:' : 'Quota Payer:'}</span>
+                          </span>
+                          <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                            ${savedKeys.map(k => {
+                              const isQuotaSource = (task.quota_account && task.quota_account.toLowerCase() === k.toLowerCase()) || (!task.quota_account && k.toLowerCase() === (assigned[0] || savedKeys[0]).toLowerCase());
+                              const accShort = getCleanUserDisplayName(swState.savedAccounts[k]?.name, k);
+                              return `
+                                <button class="aqm-task-quota-chip" data-task="${task.task_name}" data-acc="${k}" data-active="${isQuotaSource}" title="${isFa ? `کسر سهمیه این تسک از حساب ${k}` : `Deduct quota for this task from ${k}`}" style="padding:2px 8px;border-radius:9999px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.15s ease;display:inline-flex;align-items:center;gap:4px;background:${isQuotaSource ? 'rgba(56,189,248,0.22)' : 'rgba(255,255,255,0.04)'};color:${isQuotaSource ? '#38bdf8' : '#94a3b8'};border:1px solid ${isQuotaSource ? 'rgba(56,189,248,0.6)' : 'rgba(255,255,255,0.08)'};box-shadow:${isQuotaSource ? '0 0 8px rgba(56,189,248,0.25)' : 'none'};">
+                                  <span>${isQuotaSource ? '✓' : '○'}</span>
+                                  <span>${accShort}</span>
+                                </button>
+                              `;
+                            }).join('')}
+                          </div>
+                        </div>
+
                         <!-- Account Assignment Chips Matrix -->
-                        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-top:4px;border-top:1px solid rgba(255,255,255,0.05);">
-                          <span style="font-size:10px;color:#64748b;margin-left:2px;">${isFa ? 'اکانت‌های مجاز:' : 'Assigned:'}</span>
+                        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-top:4px;">
+                          <span style="font-size:10px;color:#64748b;margin-left:2px;">${isFa ? 'دسترسی مجاز:' : 'Access:'}</span>
                           ${savedKeys.map(k => {
                             const isAssigned = assigned.includes(k.toLowerCase()) || (assigned.includes('instance_1') && k === savedKeys[0]);
                             const accShort = getCleanUserDisplayName(swState.savedAccounts[k]?.name, k);
@@ -4108,6 +4148,32 @@
       };
     });
 
+    modal.querySelectorAll('.aqm-proj-quota-chip').forEach(btn => {
+      btn.onclick = () => {
+        const pid = btn.getAttribute('data-pid');
+        const acc = btn.getAttribute('data-acc');
+        showSwitcherToast(isFa ? `تنظیم حساب کسر سهمیه به ${acc}...` : `Setting quota account to ${acc}...`);
+        if (callDaemonIpc('setProjectQuotaAccount', { projectId: pid, account: acc })) {
+          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
+          return;
+        }
+        fetch('http://127.0.0.1:39281/api/project_set_quota_account', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: pid, account: acc })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? `حساب کسر سهمیه به ${acc} تنظیم شد` : `Quota account updated to ${acc}`);
+            fetchSwitcherState(() => renderSwitcherModal());
+          }
+        }).catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
+      };
+    });
+
     modal.querySelectorAll('.aqm-proj-sync-btn').forEach(btn => {
       btn.onclick = () => {
         const pid = btn.getAttribute('data-pid');
@@ -4134,37 +4200,43 @@
     // Tasks Tab Actions
     const taskAllowAllBtn = modal.querySelector('#aqm-task-allow-all-btn');
     if (taskAllowAllBtn) {
-      taskAllowAllBtn.onclick = async () => {
-        showSwitcherToast(isFa ? 'در حال فعال‌سازی تمام تسک‌ها برای تمام حساب‌ها...' : 'Enabling all tasks for all accounts...');
-        for (const task of tasksList) {
-          if (!callDaemonIpc('toggleTaskAll', { taskName: task.task_name, state: 'all' })) {
-            await fetch('http://127.0.0.1:39281/api/task_toggle_all', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ taskName: task.task_name, state: 'all' })
-            }).catch(() => {});
+      taskAllowAllBtn.onclick = () => {
+        showSwitcherToast(isFa ? 'فعال‌سازی همه تسک‌ها در اکانت ۲...' : 'Enabling all tasks in Instance 2...');
+        fetch('http://127.0.0.1:39281/api/task_batch_assign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accounts: 'instance_2', enabled: true })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? 'همه تسک‌ها در اکانت ۲ فعال شدند' : 'All tasks enabled in Instance 2');
+            fetchSwitcherState(() => renderSwitcherModal());
           }
-        }
-        showSwitcherToast(isFa ? 'تمام تسک‌ها برای تمام حساب‌ها فعال شدند' : 'All tasks enabled for all accounts');
-        fetchSwitcherState(() => renderSwitcherModal());
+        }).catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
       };
     }
 
     const taskIsolateAllBtn = modal.querySelector('#aqm-task-isolate-all-btn');
     if (taskIsolateAllBtn) {
-      taskIsolateAllBtn.onclick = async () => {
-        showSwitcherToast(isFa ? 'در حال متوقف کردن تمام تسک‌ها...' : 'Disabling all tasks...');
-        for (const task of tasksList) {
-          if (!callDaemonIpc('toggleTaskAll', { taskName: task.task_name, state: 'none' })) {
-            await fetch('http://127.0.0.1:39281/api/task_toggle_all', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ taskName: task.task_name, state: 'none' })
-            }).catch(() => {});
+      taskIsolateAllBtn.onclick = () => {
+        showSwitcherToast(isFa ? 'ایزوله‌سازی همه تسک‌ها از اکانت ۲...' : 'Isolating all tasks from Instance 2...');
+        fetch('http://127.0.0.1:39281/api/task_batch_assign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accounts: 'instance_2', enabled: false })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? 'همه تسک‌ها از اکانت ۲ ایزوله شدند' : 'All tasks isolated from Instance 2');
+            fetchSwitcherState(() => renderSwitcherModal());
           }
-        }
-        showSwitcherToast(isFa ? 'تمام تسک‌ها متوقف شدند' : 'All tasks disabled');
-        fetchSwitcherState(() => renderSwitcherModal());
+        }).catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
       };
     }
 
@@ -4172,15 +4244,12 @@
       btn.onclick = () => {
         const tname = btn.getAttribute('data-task');
         const st = btn.getAttribute('data-state');
-        showSwitcherToast(isFa ? 'در حال به‌روزرسانی تسک...' : 'Updating task...');
-        if (callDaemonIpc('toggleTaskAll', { taskName: tname, state: st })) {
-          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
-          return;
-        }
-        fetch('http://127.0.0.1:39281/api/task_toggle_all', {
+        const isAll = st === 'all';
+        showSwitcherToast(isFa ? (isAll ? 'فعال‌سازی برای تمام اکانت‌ها...' : 'ایزوله‌سازی کامل تسک...') : (isAll ? 'Enabling for all accounts...' : 'Isolating task...'));
+        fetch('http://127.0.0.1:39281/api/task_assign_all', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskName: tname, state: st })
+          body: JSON.stringify({ taskName: tname, enabled: isAll })
         })
         .then(r => r.json())
         .then(res => {
@@ -4214,6 +4283,32 @@
         .then(res => {
           if (res && res.success) {
             showSwitcherToast(isFa ? 'انتساب تسک به‌روزرسانی شد' : 'Task assignment updated');
+            fetchSwitcherState(() => renderSwitcherModal());
+          }
+        }).catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
+      };
+    });
+
+    modal.querySelectorAll('.aqm-task-quota-chip').forEach(btn => {
+      btn.onclick = () => {
+        const tname = btn.getAttribute('data-task');
+        const acc = btn.getAttribute('data-acc');
+        showSwitcherToast(isFa ? `تنظیم حساب کسر سهمیه به ${acc}...` : `Setting quota account to ${acc}...`);
+        if (callDaemonIpc('setTaskQuotaAccount', { taskName: tname, account: acc })) {
+          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
+          return;
+        }
+        fetch('http://127.0.0.1:39281/api/task_set_quota_account', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskName: tname, account: acc })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? `حساب کسر سهمیه تسک به ${acc} تنظیم شد` : `Task quota account updated to ${acc}`);
             fetchSwitcherState(() => renderSwitcherModal());
           }
         }).catch(() => {

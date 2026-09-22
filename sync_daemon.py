@@ -1021,6 +1021,24 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                     data.get('projectId'),
                     state=data.get('state', 'all')
                 )
+            elif self.path == '/api/project_set_quota_account':
+                import migration_engine as m_eng
+                resp = m_eng.set_project_quota_account(
+                    data.get('projectId'),
+                    data.get('account') or data.get('quotaAccount')
+                )
+            elif self.path == '/api/task_set_quota_account':
+                import migration_engine as m_eng
+                resp = m_eng.set_task_quota_account(
+                    data.get('taskName') or data.get('name'),
+                    data.get('account') or data.get('quotaAccount')
+                )
+            elif self.path == '/api/task_run_guarded':
+                import migration_engine as m_eng
+                resp = m_eng.run_guarded_task(
+                    data.get('taskName') or data.get('name'),
+                    custom_command=data.get('command')
+                )
             elif self.path == '/api/project_sync':
                 import migration_engine as m_eng
                 resp = m_eng.sync_project_to_account(
@@ -1279,6 +1297,29 @@ async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_
             res = m_eng.toggle_project_all(p_id, state=st)
             broadcast_all_instances({
                 "msg": f"پروژه برای {'همه اکانت‌ها فعال' if st == 'all' else 'همه اکانت‌ها غیرفعال'} شد" if res.get("success") else "خطا در تغییر وضعیت پروژه",
+                "isErr": not res.get("success")
+            })
+        elif action in ["setProjectQuotaAccount", "set_project_quota_account"]:
+            p_id = data.get("projectId")
+            acc = data.get("account") or data.get("quotaAccount")
+            res = m_eng.set_project_quota_account(p_id, acc)
+            broadcast_all_instances({
+                "msg": f"حساب کسر سهمیه پروژه به {acc} تنظیم شد" if res.get("success") else "خطا در تنظیم حساب سهمیه",
+                "isErr": not res.get("success")
+            })
+        elif action in ["setTaskQuotaAccount", "set_task_quota_account"]:
+            t_name = data.get("taskName") or data.get("name")
+            acc = data.get("account") or data.get("quotaAccount")
+            res = m_eng.set_task_quota_account(t_name, acc)
+            broadcast_all_instances({
+                "msg": f"حساب کسر سهمیه تسک به {acc} تنظیم شد" if res.get("success") else "خطا در تنظیم حساب سهمیه",
+                "isErr": not res.get("success")
+            })
+        elif action in ["runGuardedTask", "run_guarded_task"]:
+            t_name = data.get("taskName") or data.get("name")
+            res = m_eng.run_guarded_task(t_name, custom_command=data.get("command"))
+            broadcast_all_instances({
+                "msg": res.get("msg") or res.get("error") or "دستور تسک اجرا شد",
                 "isErr": not res.get("success")
             })
         elif action == "syncProject":

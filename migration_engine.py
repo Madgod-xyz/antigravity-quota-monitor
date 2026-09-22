@@ -251,6 +251,7 @@ def list_projects(account=None):
         name = prof.get("name") or raw.get("name") or pid
         path = prof.get("path") or raw.get("path") or ""
         assigned = prof.get("assigned_accounts", [get_primary_account()])
+        quota_account = norm_account(prof.get("quota_account") or (assigned[0] if assigned else get_primary_account()))
         count = conv_counts.get(pid, 0)
         
         item = {
@@ -258,6 +259,7 @@ def list_projects(account=None):
             "name": name,
             "path": path,
             "assigned_accounts": assigned,
+            "quota_account": quota_account,
             "conversation_count": count,
             "enabled_all": prof.get("enabled_all", False),
             "disabled_all": prof.get("disabled_all", len(assigned) == 0),
@@ -359,6 +361,54 @@ def toggle_project_all(project_id, state="all"):
         "success": True,
         "project_id": project_id,
         "state": state,
+        "assigned_accounts": prof["assigned_accounts"]
+    }
+
+def get_project_quota_account(project_id):
+    """Retrieve the designated quota payer account for a project."""
+    manifest = load_profile_sync_manifest()
+    prof = manifest.get("project_profiles", {}).get(project_id, {})
+    assigned = prof.get("assigned_accounts", [])
+    return norm_account(prof.get("quota_account") or (assigned[0] if assigned else get_primary_account()))
+
+def set_project_quota_account(project_id, account):
+    """
+    Explicitly set which account's quota is consumed for this project.
+    Ensures that account is added to assigned_accounts so it has project access.
+    """
+    manifest = load_profile_sync_manifest()
+    raw_projects = discover_raw_projects()
+    prof = manifest.setdefault("project_profiles", {}).setdefault(project_id, {
+        "name": raw_projects.get(project_id, {}).get("name", project_id),
+        "path": raw_projects.get(project_id, {}).get("path", "")
+    })
+    clean_acc = norm_account(account)
+    prof["quota_account"] = clean_acc
+    assigned = [norm_account(x) for x in prof.get("assigned_accounts", []) if x]
+    if clean_acc and not any(a.lower() == clean_acc.lower() for a in assigned):
+        assigned.append(clean_acc)
+        prof["assigned_accounts"] = assigned
+        prof["disabled_all"] = False
+
+    # Sync quota_account into project local config.json if present
+    p_path = prof.get("path")
+    if p_path and os.path.isdir(p_path):
+        cfg_path = os.path.join(p_path, "config.json")
+        if os.path.exists(cfg_path):
+            try:
+                with open(cfg_path, "r", encoding="utf-8") as cf:
+                    cfg_data = json.load(cf)
+                cfg_data["quota_account"] = clean_acc
+                with open(cfg_path, "w", encoding="utf-8") as cf:
+                    json.dump(cfg_data, cf, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
+    save_profile_sync_manifest(manifest)
+    return {
+        "success": True,
+        "project_id": project_id,
+        "quota_account": clean_acc,
         "assigned_accounts": prof["assigned_accounts"]
     }
 
@@ -830,10 +880,13 @@ def list_scheduled_tasks(account=None):
                 status = f"Isolated (Blocked in {acc_clean})"
                 enabled = False
 
+        quota_account = norm_account(m_info.get("quota_account") or owner)
+
         task_list.append({
             "name": name,
             "task_name": name,
             "owner_account": owner,
+            "quota_account": quota_account,
             "assigned_accounts": clean_assigned,
             "disabled_all": disabled_all,
             "enabled_all": enabled_all,
@@ -977,6 +1030,53 @@ def toggle_task_all(task_name, state="all"):
         "state": state,
         "assigned_accounts": task_entry["assigned_accounts"],
         "enabled": task_entry["enabled"]
+    }
+
+def get_task_quota_account(task_name):
+    """Retrieve the designated quota payer account for a scheduled task."""
+    manifest = load_task_manifest()
+    task_entry = manifest.get("tasks", {}).get(task_name, {})
+    return norm_account(task_entry.get("quota_account") or task_entry.get("owner_account") or PRIMARY_ACCOUNT)
+
+def set_task_quota_account(task_name, account):
+    """
+    Explicitly set which account's quota is consumed when this scheduled task executes.
+    Ensures that account is in assigned_accounts so it can run the task.
+    """
+    manifest = load_task_manifest()
+    tasks = manifest.setdefault("tasks", {})
+    task_entry = tasks.setdefault(task_name, {
+        "name": task_name,
+        "system_type": "windows_scheduled_task"
+    })
+    clean_acc = norm_account(account)
+    task_entry["quota_account"] = clean_acc
+    assigned = [norm_account(x) for x in task_entry.get("assigned_accounts", []) if x]
+    if clean_acc and not any(a.lower() == clean_acc.lower() for a in assigned):
+        assigned.append(clean_acc)
+        task_entry["assigned_accounts"] = assigned
+        task_entry["disabled_all"] = False
+
+    # Sync quota_account into task project_path config.json if present
+    p_path = task_entry.get("project_path")
+    if p_path and os.path.isdir(p_path):
+        cfg_path = os.path.join(p_path, "config.json")
+        if os.path.exists(cfg_path):
+            try:
+                with open(cfg_path, "r", encoding="utf-8") as cf:
+                    cfg_data = json.load(cf)
+                cfg_data["quota_account"] = clean_acc
+                with open(cfg_path, "w", encoding="utf-8") as cf:
+                    json.dump(cfg_data, cf, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
+    save_task_manifest(manifest)
+    return {
+        "success": True,
+        "task_name": task_name,
+        "quota_account": clean_acc,
+        "assigned_accounts": task_entry["assigned_accounts"]
     }
 
 def set_task_isolation(task_name, owner_account=PRIMARY_ACCOUNT, isolate_from_account2=True, allowed_instances=None, requesting_account=None):
@@ -1135,6 +1235,7 @@ def check_task_guard(task_name, current_account=None, instance_id=None):
             current_account = PRIMARY_ACCOUNT
 
     curr_clean = norm_account(current_account)
+    quota_acc = norm_account(task_entry.get("quota_account") or task_entry.get("owner_account") or PRIMARY_ACCOUNT)
 
     # Multi-account assignment check
     assigned = task_entry.get("assigned_accounts")
@@ -1143,9 +1244,10 @@ def check_task_guard(task_name, current_account=None, instance_id=None):
         if curr_clean.lower() not in clean_assigned:
             return {
                 "allowed": False,
+                "quota_account": quota_acc,
                 "reason": f"Task '{task_name}' is assigned only to {assigned}, blocked for '{curr_clean}'."
             }
-        return {"allowed": True, "assigned_accounts": assigned}
+        return {"allowed": True, "assigned_accounts": assigned, "quota_account": quota_acc}
 
     # Backward compatibility fallback:
     owner = norm_account(task_entry.get("owner_account", PRIMARY_ACCOUNT))
@@ -1156,6 +1258,7 @@ def check_task_guard(task_name, current_account=None, instance_id=None):
         return {
             "allowed": False,
             "owner": owner,
+            "quota_account": quota_acc,
             "reason": f"Task '{task_name}' is restricted to {allowed_instances}, current instance is '{curr_instance}'."
         }
 
@@ -1163,6 +1266,7 @@ def check_task_guard(task_name, current_account=None, instance_id=None):
         return {
             "allowed": False,
             "owner": owner,
+            "quota_account": quota_acc,
             "reason": f"Task '{task_name}' is assigned to '{owner}' and blocked for account 2 ('{curr_clean}')."
         }
 
@@ -1170,10 +1274,85 @@ def check_task_guard(task_name, current_account=None, instance_id=None):
         return {
             "allowed": False,
             "owner": owner,
+            "quota_account": quota_acc,
             "reason": f"Task '{task_name}' is assigned to '{owner}' and blocked for account 1 ('{curr_clean}')."
         }
 
-    return {"allowed": True, "owner": owner}
+    return {"allowed": True, "owner": owner, "quota_account": quota_acc}
+
+def get_account_environment(account_email):
+    """
+    Returns an environment dictionary configured for a specific account,
+    including its fresh OAuth token, API keys, and account identifiers.
+    """
+    env = os.environ.copy()
+    clean_acc = norm_account(account_email)
+    env["ANTIGRAVITY_ACCOUNT"] = clean_acc
+    env["ANTIGRAVITY_QUOTA_ACCOUNT"] = clean_acc
+    
+    tok_file = os.path.join(ACCOUNTS_DIR, f"{clean_acc}.token")
+    if os.path.exists(tok_file):
+        try:
+            with open(tok_file, 'r', encoding='utf-8') as f:
+                raw_tok = f.read().strip()
+            import quota_engine
+            fresh_tok = quota_engine.ensure_fresh_token(raw_tok, account_email=clean_acc)
+            if fresh_tok:
+                access_tok = fresh_tok
+                if "access_token" in fresh_tok:
+                    try:
+                        d = json.loads(fresh_tok)
+                        access_tok = d.get("token", {}).get("access_token") or d.get("access_token") or fresh_tok
+                    except Exception:
+                        pass
+                env["GEMINI_CLI_OAUTH_TOKEN"] = access_tok
+                env["GOOGLE_OAUTH_ACCESS_TOKEN"] = access_tok
+        except Exception:
+            pass
+    return env
+
+def run_guarded_task(task_name, custom_command=None):
+    """
+    Executes a task under its designated quota_account credentials,
+    enforcing guard rules and capturing execution status.
+    """
+    manifest = load_task_manifest()
+    task_entry = manifest.get("tasks", {}).get(task_name, {})
+    quota_acc = norm_account(task_entry.get("quota_account") or task_entry.get("owner_account") or PRIMARY_ACCOUNT)
+    
+    guard = check_task_guard(task_name, current_account=quota_acc)
+    if not guard.get("allowed"):
+        return {"success": False, "error": f"Task guard blocked execution: {guard.get('reason')}", "quota_account": quota_acc}
+
+    env = get_account_environment(quota_acc)
+    cmd = custom_command
+    if not cmd:
+        proj_path = task_entry.get("project_path", "")
+        if "Samansa" in task_name and proj_path:
+            cmd = [sys.executable, os.path.join(proj_path, "daily_seo_runner.py"), "--batch-size", "30"]
+        elif "Nabi" in task_name and proj_path:
+            bat_path = os.path.join(proj_path, "run_daily_seo.bat")
+            if os.path.exists(bat_path):
+                cmd = ["cmd.exe", "/c", bat_path]
+            else:
+                cmd = [sys.executable, os.path.join(proj_path, "daily_seo_runner.py"), "--all"]
+        else:
+            return {"success": False, "error": f"No execution command configured for task '{task_name}'", "quota_account": quota_acc}
+
+    try:
+        kwargs = {"env": env}
+        if platform.system().lower() == "windows":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        proc = subprocess.Popen(cmd, **kwargs)
+        return {
+            "success": True,
+            "task_name": task_name,
+            "pid": proc.pid,
+            "quota_account": quota_acc,
+            "msg": f"تسک '{task_name}' با سهمیه اکانت '{quota_acc}' اجرا شد (PID: {proc.pid})"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e), "quota_account": quota_acc}
 
 # ==============================================================================
 # 4. SAFETY BACKUP & CONVERSATION CLONING / MERGING
@@ -1435,6 +1614,7 @@ if __name__ == '__main__':
     parser.add_argument('--tasks', action='store_true', help='List all scheduled tasks')
     parser.add_argument('--allowed-convs', help='List allowed conversation IDs for account')
     parser.add_argument('--check-task-guard', help='Check if task is permitted to execute')
+    parser.add_argument('--run-task', help='Run scheduled task with its designated quota_account credentials')
     parser.add_argument('--account', help='Account email or instance alias to check against')
     args = parser.parse_args()
 
@@ -1450,5 +1630,9 @@ if __name__ == '__main__':
         guard_res = check_task_guard(args.check_task_guard, current_account=args.account)
         print(json.dumps(guard_res, indent=2, ensure_ascii=False))
         sys.exit(0 if guard_res.get("allowed") else 1)
+    elif args.run_task:
+        res = run_guarded_task(args.run_task)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        sys.exit(0 if res.get("success") else 1)
     else:
         print("Antigravity Migration & Profile Isolation Engine Ready.")
