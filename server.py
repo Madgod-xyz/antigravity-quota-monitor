@@ -67,27 +67,77 @@ DEFAULT_USER_SETTINGS = {
     "lang": "fa"
 }
 
-def load_user_settings():
+def load_user_settings(instance_id=None, account_email=None):
+    base = dict(DEFAULT_USER_SETTINGS)
     if USER_SETTINGS_PATH.exists():
         try:
             with open(USER_SETTINGS_PATH, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-                res = dict(DEFAULT_USER_SETTINGS)
-                res.update(saved)
-                return res
+                if isinstance(saved, dict):
+                    for k, v in saved.items():
+                        if k not in ("instances", "accounts"):
+                            base[k] = v
+                    if account_email and "accounts" in saved and isinstance(saved["accounts"], dict):
+                        acc_settings = saved["accounts"].get(account_email) or saved["accounts"].get(account_email.lower())
+                        if isinstance(acc_settings, dict):
+                            base.update(acc_settings)
+                    if instance_id and "instances" in saved and isinstance(saved["instances"], dict):
+                        inst_settings = saved["instances"].get(instance_id)
+                        if isinstance(inst_settings, dict):
+                            base.update(inst_settings)
+                    return base
         except Exception:
             pass
-    return dict(DEFAULT_USER_SETTINGS)
+    return base
 
-def save_user_settings(patch):
+def save_user_settings(patch, instance_id=None, account_email=None):
     try:
-        cur = load_user_settings()
+        raw = {}
+        if USER_SETTINGS_PATH.exists():
+            try:
+                with open(USER_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            except Exception:
+                raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+            
+        if "instances" not in raw or not isinstance(raw["instances"], dict):
+            raw["instances"] = {}
+        if "accounts" not in raw or not isinstance(raw["accounts"], dict):
+            raw["accounts"] = {}
+
         if isinstance(patch, dict):
-            cur.update(patch)
+            if not instance_id and patch.get("instance_id"):
+                instance_id = patch.get("instance_id")
+            if not account_email and patch.get("account"):
+                account_email = patch.get("account")
+
+        clean_patch = {k: v for k, v in patch.items() if k not in ("instance_id", "account")} if isinstance(patch, dict) else {}
+
+        if instance_id:
+            inst_cur = raw["instances"].get(instance_id, {})
+            if not isinstance(inst_cur, dict):
+                inst_cur = {}
+            inst_cur.update(clean_patch)
+            raw["instances"][instance_id] = inst_cur
+
+        if account_email:
+            acc_cur = raw["accounts"].get(account_email, {})
+            if not isinstance(acc_cur, dict):
+                acc_cur = {}
+            acc_cur.update(clean_patch)
+            raw["accounts"][account_email] = acc_cur
+
+        for k, v in clean_patch.items():
+            raw[k] = v
+
         USER_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(USER_SETTINGS_PATH, "w", encoding="utf-8") as f:
-            json.dump(cur, f, indent=2, ensure_ascii=False)
-        return True, cur
+            json.dump(raw, f, indent=2, ensure_ascii=False)
+            
+        resolved = load_user_settings(instance_id=instance_id, account_email=account_email)
+        return True, resolved
     except Exception as e:
         return False, str(e)
 
@@ -173,31 +223,38 @@ def is_dual_launching():
     """Returns True if a dual instance launch is currently swapping credentials temporarily."""
     return _dual_launch_in_progress
 
-def is_instance2_running():
-    """Check if Antigravity-Instance2 is currently running, avoiding false positives from non-antigravity processes."""
+def is_instance_running(inst_dir_or_name):
+    """Check if an Antigravity instance with a given user-data-dir is currently running."""
+    if not inst_dir_or_name:
+        return False
+    needle = inst_dir_or_name.name.lower() if hasattr(inst_dir_or_name, "name") else str(inst_dir_or_name).lower()
     try:
         import psutil
         for p in psutil.process_iter(['pid', 'name', 'cmdline']):
             name = (p.info.get('name') or '').lower()
             if 'antigravity' in name:
                 cmd = p.info.get('cmdline') or []
-                if any('Antigravity-Instance2' in arg for arg in cmd):
+                if any(needle in arg.lower() for arg in cmd):
                     return True
     except Exception:
         pass
     return False
 
-def focus_instance2():
+def is_instance2_running():
+    """Backward compatibility alias for Instance 2."""
+    return is_instance_running("Antigravity-Instance2")
+
+def focus_instance(inst_dir):
     """
-    Brings the existing Antigravity-Instance2 window to the foreground and un-minimizes it.
+    Brings an Antigravity instance window to the foreground and un-minimizes it.
     Uses CDP Page.bringToFront combined with native Win32 window restoration.
     """
     focused = False
     sys_name = quota_engine.get_current_system()
+    inst_dir = Path(inst_dir)
+    dir_name = inst_dir.name
     if sys_name == 'windows':
-        appdata = Path(os.getenv("APPDATA", str(Path.home() / "AppData" / "Roaming")))
-        inst2_dir = appdata / "Antigravity-Instance2"
-        port_file = inst2_dir / "DevToolsActivePort"
+        port_file = inst_dir / "DevToolsActivePort"
         
         # 1. CDP Page.bringToFront via active DevTools port
         if port_file.exists():
@@ -230,15 +287,15 @@ def focus_instance2():
             from ctypes import wintypes
             import psutil
 
-            inst2_pids = set()
+            inst_pids = set()
             for p in psutil.process_iter(['pid', 'name', 'cmdline']):
                 name = (p.info.get('name') or '').lower()
                 if 'antigravity' in name:
                     cmd = p.info.get('cmdline') or []
-                    if any('Antigravity-Instance2' in arg for arg in cmd):
-                        inst2_pids.add(p.info['pid'])
+                    if any(dir_name.lower() in arg.lower() for arg in cmd):
+                        inst_pids.add(p.info['pid'])
 
-            if inst2_pids:
+            if inst_pids:
                 user32 = ctypes.windll.user32
                 h_desk = user32.OpenDesktopW('Default', 0, False, 0x01FF)
                 if h_desk:
@@ -248,7 +305,7 @@ def focus_instance2():
                 def enum_cb(hwnd, lparam):
                     pid = wintypes.DWORD()
                     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                    if pid.value in inst2_pids:
+                    if pid.value in inst_pids:
                         length = user32.GetWindowTextLengthW(hwnd)
                         if length > 0:
                             SW_RESTORE = 9
@@ -271,18 +328,121 @@ def focus_instance2():
             pass
     return focused
 
+def focus_instance2():
+    """Backward compatibility alias for Instance 2."""
+    appdata = Path(os.getenv("APPDATA", str(Path.home() / "AppData" / "Roaming")))
+    return focus_instance(appdata / "Antigravity-Instance2")
+
+def get_instance_dir_for_account(account_key):
+    """
+    Resolves or assigns an isolated user-data-dir for an account.
+    Returns (instance_id, Path(instance_dir)).
+    Supports arbitrary numbers of instances (Instance2, Instance3, Instance4, etc.).
+    """
+    sys_name = quota_engine.get_current_system()
+    home = Path.home()
+    if sys_name == 'windows':
+        appdata = Path(os.getenv("APPDATA", str(home / "AppData" / "Roaming")))
+    else:
+        appdata = home / "Library" / "Application Support"
+
+    manifest = load_manifest()
+    entry = manifest.setdefault(account_key, {})
+    target_email = account_key.lower().strip()
+
+    # 1. If manifest already has an explicit instance_id for THIS account
+    assigned_inst = entry.get("instance_id")
+    if assigned_inst and assigned_inst != "instance_1":
+        num = "".join(filter(str.isdigit, assigned_inst))
+        if num:
+            inst_dir = appdata / f"Antigravity-Instance{num}"
+            storage_p = inst_dir / "app_storage.json"
+            if storage_p.exists():
+                try:
+                    with open(storage_p, "r", encoding="utf-8") as f:
+                        acc = json.load(f).get("antigravity:account_email")
+                        if not acc or acc.lower().strip() == target_email:
+                            return assigned_inst, inst_dir
+                except Exception:
+                    return assigned_inst, inst_dir
+            else:
+                return assigned_inst, inst_dir
+
+    # 2. Check existing Antigravity-Instance* directories on disk for THIS account
+    used_slots = set()
+    try:
+        for inst_dir in sorted(appdata.glob("Antigravity-Instance*")):
+            if not inst_dir.is_dir():
+                continue
+            dir_name = inst_dir.name
+            num_str = "".join(filter(str.isdigit, dir_name))
+            if num_str and num_str.isdigit():
+                used_slots.add(int(num_str))
+
+            storage_p = inst_dir / "app_storage.json"
+            if storage_p.exists():
+                try:
+                    with open(storage_p, "r", encoding="utf-8") as f:
+                        acc = json.load(f).get("antigravity:account_email")
+                        if acc and acc.lower().strip() == target_email:
+                            inst_id = f"instance_{num_str}" if num_str else dir_name.lower().replace("-", "_")
+                            entry["instance_id"] = inst_id
+                            manifest[account_key] = entry
+                            save_manifest(manifest)
+                            return inst_id, inst_dir
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Also check manifest entries for other accounts
+    for acc, data in manifest.items():
+        if acc.lower().strip() == target_email:
+            continue
+        i_id = data.get("instance_id", "")
+        num = "".join(filter(str.isdigit, i_id))
+        if num and num.isdigit():
+            used_slots.add(int(num))
+
+    # 3. Find first completely unassigned slot >= 2
+    slot = 2
+    while slot in used_slots:
+        slot += 1
+
+    # Double check directory doesn't already belong to another account
+    while (appdata / f"Antigravity-Instance{slot}").exists():
+        cand_storage = (appdata / f"Antigravity-Instance{slot}") / "app_storage.json"
+        if cand_storage.exists():
+            try:
+                with open(cand_storage, "r", encoding="utf-8") as f:
+                    c_acc = json.load(f).get("antigravity:account_email")
+                    if c_acc and c_acc.lower().strip() == target_email:
+                        break
+            except Exception:
+                pass
+        slot += 1
+
+    inst_id = f"instance_{slot}"
+    target_dir = appdata / f"Antigravity-Instance{slot}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    entry["instance_id"] = inst_id
+    manifest[account_key] = entry
+    save_manifest(manifest)
+    return inst_id, target_dir
+
 def launch_dual_instance(account_key, project_path=None):
     """
-    Safely launches or focuses a concurrent secondary Antigravity instance under the same Windows user
+    Safely launches or focuses a concurrent Antigravity instance for any account
     with an isolated profile (--user-data-dir) and target account credentials.
+    Supports unlimited concurrent accounts (Instance2, Instance3, Instance4, etc.).
     Zero interference with primary active session.
     """
     global _last_dual_launch_time, _dual_launch_in_progress
     with _launch_dual_lock:
         now = time.time()
-        # Debounce rapid clicks within 2.5s
-        if now - _last_dual_launch_time < 2.5:
-            return {'success': True, 'msg': 'در حال آماده‌سازی پنجره دوم...'}
+        # Debounce rapid clicks within 2.0s
+        if now - _last_dual_launch_time < 2.0:
+            return {'success': True, 'msg': 'در حال آماده‌سازی پنجره...'}
         _last_dual_launch_time = now
 
         manifest = load_manifest()
@@ -338,10 +498,9 @@ def launch_dual_instance(account_key, project_path=None):
         target_token = quota_engine.ensure_fresh_token(target_token, account_email=account_key)
             
         sys_name = quota_engine.get_current_system()
-        appdata = Path(os.getenv("APPDATA", str(Path.home() / "AppData" / "Roaming")))
-        inst2_dir = appdata / "Antigravity-Instance2"
+        inst_id, target_inst_dir = get_instance_dir_for_account(account_key)
 
-        # Resolve designated project path for Instance 2 if not passed explicitly
+        # Resolve designated project path for this instance if not passed explicitly
         if not project_path:
             try:
                 prof_man = migration_engine.load_profile_sync_manifest()
@@ -355,15 +514,16 @@ def launch_dual_instance(account_key, project_path=None):
             except Exception:
                 pass
 
-        # If Instance 2 is already running, focus and bring to front directly!
-        if is_instance2_running():
-            focus_instance2()
+        # If this instance is already running, focus and bring to front directly!
+        if is_instance_running(target_inst_dir):
+            focus_instance(target_inst_dir)
             return {
                 'success': True,
                 'account': account_key,
-                'user_data_dir': str(inst2_dir),
+                'instance_id': inst_id,
+                'user_data_dir': str(target_inst_dir),
                 'project_path': project_path or '',
-                'msg': 'پنجره دوم فعال شد'
+                'msg': f'پنجره حساب {account_key} فعال شد'
             }
 
         # Deterministic primary token resolution
@@ -400,18 +560,18 @@ def launch_dual_instance(account_key, project_path=None):
             primary_token = quota_engine.get_keychain_token()
 
         if sys_name == 'windows':
-            inst2_dir.mkdir(parents=True, exist_ok=True)
+            target_inst_dir.mkdir(parents=True, exist_ok=True)
             
             # Clean stale locks and ports
             for f_name in ["DevToolsActivePort", "lockfile"]:
-                f_p = inst2_dir / f_name
+                f_p = target_inst_dir / f_name
                 if f_p.exists():
                     try:
                         f_p.unlink()
                     except Exception:
                         pass
 
-            # Pre-configure instance 2 project in app_storage.json if designated
+            # Pre-configure instance project in app_storage.json if designated
             designated_pid = ""
             try:
                 prof_man = migration_engine.load_profile_sync_manifest()
@@ -425,18 +585,18 @@ def launch_dual_instance(account_key, project_path=None):
                 pass
 
             try:
-                storage_p = inst2_dir / "app_storage.json"
+                storage_p = target_inst_dir / "app_storage.json"
                 s_data = {}
                 if storage_p.exists():
                     with open(storage_p, 'r', encoding='utf-8') as sf:
                         s_data = json.load(sf)
                 if designated_pid:
                     s_data["new-convo-last-selected-project"] = designated_pid
-                s_data["antigravity:instance_id"] = "instance_2"
+                s_data["antigravity:instance_id"] = inst_id
                 s_data["antigravity:account_email"] = account_key
                 if project_path:
                     s_data["antigravity:designated_project"] = project_path
-                # Prime quota in app_storage so Instance 2 immediately displays secondary account info
+                # Prime quota in app_storage so the new instance immediately displays secondary account info
                 sec_quota = quota_engine.fetch_quota_and_tier(target_token)
                 if sec_quota:
                     s_data["antigravity:active_quota"] = json.dumps(sec_quota)
@@ -465,14 +625,14 @@ def launch_dual_instance(account_key, project_path=None):
                 return {'success': False, 'error': 'فایل اجرایی Antigravity.exe یافت نشد'}
 
             _dual_launch_in_progress = True
-            # Prime target token in credential manager for instance 2 startup
+            # Prime target token in credential manager for instance startup
             write_token_to_credential_manager(target_token)
             
             # Launch secondary instance with isolated user-data-dir and designated project
             DETACHED_PROCESS = 0x00000008
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             CREATE_BREAKAWAY_FROM_JOB = 0x01000000
-            cmd = [exe, f'--user-data-dir={str(inst2_dir)}']
+            cmd = [exe, f'--user-data-dir={str(target_inst_dir)}']
             if project_path and os.path.exists(project_path):
                 cmd.append(project_path)
             flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
@@ -491,7 +651,7 @@ def launch_dual_instance(account_key, project_path=None):
                 proc = subprocess.Popen(cmd, creationflags=flags)
             
             # Restore primary token and bring window to front
-            def _post_launch_worker(launch_pid, target_acc, orig_pids):
+            def _post_launch_worker(launch_pid, target_acc, orig_pids, target_dir_path):
                 global _dual_launch_in_progress
                 start_t = time.time()
                 found_ls = False
@@ -511,7 +671,7 @@ def launch_dual_instance(account_key, project_path=None):
                             time.sleep(5.0)
                             break
                 except Exception as e:
-                    print(f"[DUAL] Error detecting language_server: {e}", flush=True)
+                    print(f"[MULTI-INSTANCE] Error detecting language_server: {e}", flush=True)
 
                 if not found_ls:
                     time.sleep(10.0)
@@ -520,42 +680,42 @@ def launch_dual_instance(account_key, project_path=None):
                 if primary_token:
                     fresh_primary = quota_engine.ensure_fresh_token(primary_token, account_email=active_email)
                     write_token_to_credential_manager(fresh_primary)
-                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [DUAL] Restored primary token for active session (Instance 2 target {target_acc} safely initialized).", flush=True)
+                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [MULTI-INSTANCE] Restored primary token for active session ({inst_id} target {target_acc} safely initialized).", flush=True)
                 _dual_launch_in_progress = False
 
                 # Bring window to front once rendered
                 for _ in range(15):
                     time.sleep(0.5)
-                    if focus_instance2():
+                    if focus_instance(target_dir_path):
                         break
 
-            threading.Thread(target=_post_launch_worker, args=(proc.pid, account_key, existing_ls_pids), daemon=True).start()
+            threading.Thread(target=_post_launch_worker, args=(proc.pid, account_key, existing_ls_pids, target_inst_dir), daemon=True).start()
             
+            clean_name = entry.get('name') or account_key.split('@')[0]
             return {
                 'success': True,
                 'pid': proc.pid,
                 'account': account_key,
-                'user_data_dir': str(inst2_dir),
-                'msg': f'پنجره دوم با اکانت {account_key} اجرا شد'
+                'instance_id': inst_id,
+                'user_data_dir': str(target_inst_dir),
+                'msg': f'پنجره جدید ({clean_name}) با موفقیت اجرا شد'
             }
         elif sys_name == 'macos':
             app_path = '/Applications/Antigravity.app'
             if not os.path.exists(app_path):
                 return {'success': False, 'error': 'Antigravity.app not found on macOS'}
-            home = Path.home()
-            inst2_dir = home / "Library" / "Application Support" / "Antigravity-Instance2"
-            inst2_dir.mkdir(parents=True, exist_ok=True)
+            target_inst_dir.mkdir(parents=True, exist_ok=True)
             write_token_to_credential_manager(target_token)
-            cmd = ['open', '-n', '-a', app_path, '--args', f'--user-data-dir={str(inst2_dir)}']
+            cmd = ['open', '-n', '-a', app_path, '--args', f'--user-data-dir={str(target_inst_dir)}']
             proc = subprocess.Popen(cmd)
             def _restore_primary_mac():
                 time.sleep(5.0)
                 if primary_token:
                     write_token_to_credential_manager(primary_token)
             threading.Thread(target=_restore_primary_mac, daemon=True).start()
-            return {'success': True, 'pid': proc.pid, 'account': account_key, 'user_data_dir': str(inst2_dir)}
+            return {'success': True, 'pid': proc.pid, 'account': account_key, 'instance_id': inst_id, 'user_data_dir': str(target_inst_dir)}
         else:
-            return {'success': False, 'error': 'Dual-instance launch is optimized for Windows/macOS'}
+            return {'success': False, 'error': 'Multi-instance launch is optimized for Windows/macOS'}
 
 def switch_account(account_key, no_restart=False):
     manifest = load_manifest()

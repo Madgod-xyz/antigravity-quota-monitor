@@ -36,20 +36,27 @@
     if (!email) return false;
     const norm = String(email).toLowerCase().trim();
     if (norm === 'instance_2' || norm === 'secondary_account' || norm.includes('account2')) return true;
-    // Any account other than madgod is an alternate/secondary account (e.g. bombhub, ali135)
-    return norm !== 'madgod.cum@gmail.com' && norm !== 'primary_account';
+    let primary = '';
+    try {
+      const manifest = JSON.parse(localStorage.getItem('antigravity:accounts_manifest') || '{}');
+      primary = Object.keys(manifest)[0] || '';
+    } catch(e) {}
+    if (primary && norm === primary.toLowerCase().trim()) return false;
+    return true;
   }
 
   function isInstance2Window() {
-    if (window.__antigravity_instance === 'instance_2') return true;
+    if (window.__antigravity_instance && window.__antigravity_instance !== 'instance_1') return true;
     if (window.__antigravity_instance === 'instance_1') return false;
     try {
-      if (localStorage.getItem('antigravity:instance_id') === 'instance_2') return true;
-      if (localStorage.getItem('antigravity:instance_id') === 'instance_1') return false;
+      const lsInst = localStorage.getItem('antigravity:instance_id');
+      if (lsInst && lsInst !== 'instance_1') return true;
+      if (lsInst === 'instance_1') return false;
     } catch(e) {}
     if (window.__antigravity_accounts) {
-      if (window.__antigravity_accounts.instanceId === 'instance_2' || window.__antigravity_accounts.instance_id === 'instance_2') return true;
-      if (window.__antigravity_accounts.instanceId === 'instance_1' || window.__antigravity_accounts.instance_id === 'instance_1') return false;
+      const aInst = window.__antigravity_accounts.instanceId || window.__antigravity_accounts.instance_id;
+      if (aInst && aInst !== 'instance_1') return true;
+      if (aInst === 'instance_1') return false;
     }
     return false;
   }
@@ -749,14 +756,20 @@
     try {
       window.__antigravity_user_settings = Object.assign({}, window.__antigravity_user_settings || {}, patch);
     } catch(e) {}
+    const instId = (typeof window !== 'undefined' && window.__antigravity_instance) || (isInstance2Window() ? 'instance_2' : 'instance_1');
+    const accEmail = (typeof window !== 'undefined' && window.__antigravity_account) || null;
+    const payload = Object.assign({}, patch, {
+      instance_id: instId,
+      account: accEmail
+    });
     try {
-      callDaemonIpc('save_user_settings', patch);
+      callDaemonIpc('save_user_settings', payload);
     } catch(e) {}
     try {
       fetch('http://127.0.0.1:39281/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch)
+        body: JSON.stringify(payload)
       }).catch(() => {});
     } catch(e) {}
   }
@@ -1173,8 +1186,8 @@
     try {
       assignedEmail = localStorage.getItem('antigravity:account_email') || window.__antigravity_account || '';
     } catch(e) {}
-    let fallbackEmail = assignedEmail || (isInst2 ? 'bombhub.apk@gmail.com' : 'madgod.cum@gmail.com');
-    let fallbackName = (assignedEmail ? (assignedEmail.split('@')[0].split('.')[0].charAt(0).toUpperCase() + assignedEmail.split('@')[0].split('.')[0].slice(1)) : (isInst2 ? 'Secondary' : 'Primary'));
+    let fallbackEmail = assignedEmail;
+    let fallbackName = (assignedEmail ? (assignedEmail.split('@')[0].split('.')[0].charAt(0).toUpperCase() + assignedEmail.split('@')[0].split('.')[0].slice(1)) : 'Account');
     let fallbackAvatar = '';
     try {
       const manifestStr = localStorage.getItem('antigravity:accounts_manifest');
@@ -1279,24 +1292,38 @@
 
           groups.forEach(g => {
             const gName = g.displayName || '';
-            const weeklyBucket = (g.buckets || []).find(b => b.displayName?.includes('Weekly'));
-            const sessionBucket = (g.buckets || []).find(b => b.displayName?.includes('Five Hour') || b.displayName?.includes('5-Hour'));
+            const weeklyBucket = (g.buckets || []).find(b => b.window === 'weekly' || b.bucketId?.toLowerCase().includes('weekly') || b.displayName?.toLowerCase().includes('weekly'));
+            const sessionBucket = (g.buckets || []).find(b => b.window === '5h' || b.bucketId?.toLowerCase().includes('5h') || b.displayName?.toLowerCase().includes('hour') || b.displayName?.toLowerCase().includes('five'));
 
-            const wRem = weeklyBucket?.remaining?.value ?? weeklyBucket?.remainingFraction ?? 1.0;
-            const sRem = sessionBucket?.remaining?.value ?? sessionBucket?.remainingFraction ?? 1.0;
+            const wRem = weeklyBucket?.remainingFraction ?? weeklyBucket?.remaining?.value ?? 1.0;
+            const sRem = sessionBucket?.remainingFraction ?? sessionBucket?.remaining?.value ?? 1.0;
             const sDesc = sessionBucket?.description || '';
             const wDesc = weeklyBucket?.description || '';
 
-            let resetsIn = 'Ready to reset';
+            let resetsIn = 'Ready';
             const m = sDesc.match(/in\s+([0-9]+\s+[a-zA-Z]+(?:\s*,\s*[0-9]+\s+[a-zA-Z]+)?)/i);
             if (m) {
               resetsIn = m[1].replace(/hours?/gi, 'hr').replace(/minutes?/gi, 'min').replace(/days?/gi, 'd');
+            } else if (sessionBucket?.resetTime) {
+              try {
+                const diff = Math.max(0, Math.floor((new Date(sessionBucket.resetTime).getTime() - Date.now()) / 1000));
+                const h = Math.floor(diff / 3600);
+                const mn = Math.floor((diff % 3600) / 60);
+                resetsIn = h > 0 ? `${h}hr ${mn}min` : `${mn}min`;
+              } catch(e) {}
             }
 
-            let wResetsIn = '2d, 19hr';
+            let wResetsIn = 'Ready';
             const mw = wDesc.match(/in\s+([0-9]+\s+[a-zA-Z]+(?:\s*,\s*[0-9]+\s+[a-zA-Z]+)?)/i);
             if (mw) {
               wResetsIn = mw[1].replace(/hours?/gi, 'hr').replace(/minutes?/gi, 'min').replace(/days?/gi, 'd');
+            } else if (weeklyBucket?.resetTime) {
+              try {
+                const diff = Math.max(0, Math.floor((new Date(weeklyBucket.resetTime).getTime() - Date.now()) / 1000));
+                const d = Math.floor(diff / 86400);
+                const h = Math.floor((diff % 86400) / 3600);
+                wResetsIn = d > 0 ? `${d}d ${h}hr` : `${h}hr`;
+              } catch(e) {}
             }
 
             const poolObj = {
@@ -1313,7 +1340,7 @@
 
             pools.push(poolObj);
 
-            if (gName.includes('Gemini')) {
+            if (gName.toLowerCase().includes('gemini')) {
               geminiSession = {
                 name: gName,
                 used_pct: poolObj.used_pct,
@@ -1362,7 +1389,7 @@
 
     try {
       // Always fetch from daemon first (most reliable, per-instance)
-      const instParam = isInstance2Window() ? 'instance_2' : 'instance_1';
+      const instParam = (typeof window !== 'undefined' && window.__antigravity_instance) || (isInstance2Window() ? 'instance_2' : 'instance_1');
       let daemonData = null;
       try {
         const res = await fetch(`http://127.0.0.1:39281/sync?instance=${instParam}`);
@@ -2736,13 +2763,20 @@
   };
 
   function isInstance2Window() {
-    if (window.__antigravity_instance === 'instance_2') return true;
+    if (window.__antigravity_instance && window.__antigravity_instance !== 'instance_1') return true;
+    if (window.__antigravity_instance === 'instance_1') return false;
     try {
-      if (localStorage.getItem('antigravity:instance_id') === 'instance_2') return true;
+      const lsInst = localStorage.getItem('antigravity:instance_id');
+      if (lsInst && lsInst !== 'instance_1') return true;
+      if (lsInst === 'instance_1') return false;
       const acc = localStorage.getItem('antigravity:account_email');
-      if (acc && (acc.toLowerCase().includes('instance2') || acc === 'instance_2')) return true;
+      if (acc && (acc.toLowerCase().includes('instance2') || acc.toLowerCase().includes('instance3') || acc.startsWith('instance_'))) return true;
     } catch(e) {}
-    if (window.__antigravity_accounts && (window.__antigravity_accounts.instanceId === 'instance_2' || window.__antigravity_accounts.instance_id === 'instance_2')) return true;
+    if (window.__antigravity_accounts) {
+      const aInst = window.__antigravity_accounts.instanceId || window.__antigravity_accounts.instance_id;
+      if (aInst && aInst !== 'instance_1') return true;
+      if (aInst === 'instance_1') return false;
+    }
     return false;
   }
 
@@ -2750,7 +2784,13 @@
     if (!email) return false;
     const norm = String(email).toLowerCase().trim();
     if (norm === 'instance_2' || norm === 'secondary_account' || norm.includes('account2')) return true;
-    return norm !== 'madgod.cum@gmail.com' && norm !== 'primary_account';
+    let primary = '';
+    try {
+      const manifest = JSON.parse(localStorage.getItem('antigravity:accounts_manifest') || '{}');
+      primary = Object.keys(manifest)[0] || '';
+    } catch(e) {}
+    if (primary && norm === primary.toLowerCase().trim()) return false;
+    return true;
   }
 
   let swState = {
@@ -2797,20 +2837,26 @@
             };
           }
         }
+        let manifest = {};
+        try {
+          manifest = JSON.parse(localStorage.getItem('antigravity:accounts_manifest') || '{}');
+        } catch(e) {}
+        const mKeys = Object.keys(manifest);
+        if (mKeys.length > 0) {
+          const chosenKey = (isInst2 ? (mKeys[1] || mKeys[0]) : mKeys[0]);
+          return {
+            email: chosenKey,
+            name: manifest[chosenKey]?.name || chosenKey.split('@')[0],
+            avatar: manifest[chosenKey]?.avatar || '',
+            tier: manifest[chosenKey]?.tier || 'Google AI Pro',
+            tier_code: manifest[chosenKey]?.tier_code || 'pro'
+          };
+        }
       } catch(e) {}
-      if (isInst2) {
-        return {
-          email: "bombhub.apk@gmail.com",
-          name: "Bombhub",
-          avatar: "https://lh3.googleusercontent.com/a/ACg8ocKTPRhpR3YKTGdBUU3d4-lhBT_p1zB89ww-TIJ_o1g54w4Cfp4=s96-c",
-          tier: "Google AI Pro",
-          tier_code: "pro"
-        };
-      }
       return {
-        email: "madgod.cum@gmail.com",
-        name: "Madgod",
-        avatar: "https://lh3.googleusercontent.com/a/ACg8ocKL_c03MxCossmd802Ci3aMxOH1oka7dLjgyC_xM0FnDA48xlA=s96-c",
+        email: "active@antigravity.ai",
+        name: "Antigravity User",
+        avatar: "",
         tier: "Google AI Pro",
         tier_code: "pro"
       };
@@ -3023,8 +3069,9 @@
   window.__showSwitcherToast = showSwitcherToast;
 
   function fetchSwitcherState(cb) {
-    const inst = isInstance2Window() ? 'instance_2' : 'instance_1';
-    fetch(`http://127.0.0.1:39281/api/state?instance=${inst}`)
+    const inst = (typeof window !== 'undefined' && window.__antigravity_instance) || (isInstance2Window() ? 'instance_2' : 'instance_1');
+    const acc = (typeof window !== 'undefined' && window.__antigravity_account) || '';
+    fetch(`http://127.0.0.1:39281/api/state?instance=${encodeURIComponent(inst)}&account=${encodeURIComponent(acc)}`)
       .then(r => r.json())
       .then(data => {
         window.__onSwitcherStateUpdate(data);
@@ -3150,7 +3197,12 @@
     } else if (assignedEmail) {
       email = assignedEmail;
     }
-    if (!email) email = isInst2 ? 'bombhub.apk@gmail.com' : 'madgod.cum@gmail.com';
+    if (!email && swState.savedAccounts) {
+      const keys = Object.keys(swState.savedAccounts);
+      if (keys.length > 0) {
+        email = (isInst2 ? (keys[1] || keys[0]) : keys[0]);
+      }
+    }
     let cleanDisplayName = (typeof getCleanUserDisplayName === 'function') 
       ? getCleanUserDisplayName(activeAcc.name, email) 
       : ((email ? email.split('@')[0].split('.')[0] : 'User'));
@@ -3394,9 +3446,15 @@
                             <button class="aqm-sw-btn aqm-sw-btn-primary" data-action="switch" data-acc="${k}" style="padding:3px 10px;font-size:11px;">
                               <span>${t.switchNow || (isFa ? 'سوئیچ' : 'Switch')}</span>
                             </button>
-                            <button class="aqm-sw-btn" data-action="launch-dual" data-acc="${k}" data-account="${k}" data-email="${accEmailStr}" title="${t.launchDualTitle || 'Open concurrently in 2nd Antigravity Window'}" style="padding:3px 8px;font-size:11px;background:rgba(59,130,246,0.15);border:1px solid rgba(59,130,246,0.3);color:#60a5fa;display:inline-flex;align-items:center;gap:3px;cursor:pointer;">
-                              <span>${t.launchDual || '⚡️ 2nd Window'}</span>
-                            </button>
+                            ${(() => {
+                              const runningAccs = Object.values(swState.runningAccounts || {});
+                              const isWinRunning = runningAccs.includes(k) || runningAccs.includes(accEmailStr);
+                              return `
+                                <button class="aqm-sw-btn" data-action="launch-dual" data-acc="${k}" data-account="${k}" data-email="${accEmailStr}" title="${isWinRunning ? (isFa ? 'انتقال به پنجره باز این حساب' : 'Focus window of this account') : (isFa ? 'باز کردن در پنجره همزمان مجزا' : 'Open concurrently in separate window')}" style="padding:3px 8px;font-size:11px;background:${isWinRunning ? 'rgba(16,185,129,0.15)' : 'rgba(59,130,246,0.15)'};border:1px solid ${isWinRunning ? 'rgba(16,185,129,0.4)' : 'rgba(59,130,246,0.3)'};color:${isWinRunning ? '#34d399' : '#60a5fa'};display:inline-flex;align-items:center;gap:3px;cursor:pointer;">
+                                  <span>${isWinRunning ? '🪟 ' + (isFa ? 'فوکوس پنجره' : 'Focus Window') : '⚡️ ' + (isFa ? 'پنجره جدید' : 'New Window')}</span>
+                                </button>
+                              `;
+                            })()}
                           `}
                           <button class="aqm-sw-btn" data-action="delete" data-acc="${k}" title="${t.deleteAccount || (isFa ? 'حذف از لیست' : 'Delete')}" style="padding:3px 7px;font-size:10.5px;color:#94a3b8;border-color:transparent;background:transparent;">
                             <span>✕</span>
@@ -3413,14 +3471,14 @@
             <div style="display:flex;flex-direction:column;gap:10px;">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 2px;">
                 <div style="font-size:11px;color:#94a3b8;line-height:1.5;">
-                  ${t.projectsDesc}
+                  ${t.projectsDesc || (isFa ? 'مدیریت تفکیک و انتساب پروژه‌ها به حساب‌های کاربری فعال' : 'Manage project profiles and account assignments')}
                 </div>
                 <div style="display:flex;gap:6px;flex-shrink:0;">
-                  <button class="aqm-sw-btn" id="aqm-proj-allow-all-btn" style="padding:3px 8px;font-size:10.5px;color:#10b981;border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.08);">
-                    ✓ ${isFa ? 'مجاز کردن همه' : (swLang === 'es' ? 'Permitir Todos' : 'Allow All')}
+                  <button class="aqm-sw-btn" id="aqm-proj-allow-all-btn" style="padding:3px 8px;font-size:10.5px;color:#10b981;border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.08);" title="${isFa ? 'فعال‌سازی تمام پروژه‌ها برای تمام حساب‌ها' : 'Enable all projects for all accounts'}">
+                    ✓ ${isFa ? 'همه اکانت‌ها' : 'All Accounts'}
                   </button>
-                  <button class="aqm-sw-btn" id="aqm-proj-isolate-all-btn" style="padding:3px 8px;font-size:10.5px;color:#f87171;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);">
-                    ✕ ${isFa ? 'جداسازی همه' : (swLang === 'es' ? 'Aislar Todos' : 'Isolate All')}
+                  <button class="aqm-sw-btn" id="aqm-proj-isolate-all-btn" style="padding:3px 8px;font-size:10.5px;color:#f87171;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);" title="${isFa ? 'غیرفعال‌سازی همه پروژه‌ها' : 'Disable all projects'}">
+                    ✕ ${isFa ? 'غیرفعال‌سازی همه' : 'Disable All'}
                   </button>
                 </div>
               </div>
@@ -3431,41 +3489,58 @@
               ` : `
                 <div style="display:flex;flex-direction:column;gap:7px;max-height:360px;overflow-y:auto;" class="aqm-custom-scroll">
                   ${projectsList.map(p => {
-                    const assigned = p.assigned_accounts || ['instance_1'];
-                    const isAcc2 = !!(p.is_instance2_enabled || p.is_shared || assigned.includes('instance_2') || assigned.some(a => isAccount2(a)));
+                    const assigned = (p.assigned_accounts || []).map(a => String(a).toLowerCase().trim());
+                    const isAll = !!p.enabled_all || (savedKeys.length > 0 && savedKeys.every(k => assigned.includes(k.toLowerCase())));
+                    const isNone = !!p.disabled_all || assigned.length === 0;
                     return `
-                      <div class="aqm-sw-card" style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
-                        <div style="flex:1;min-width:0;">
-                          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
-                            <span style="font-size:12.5px;font-weight:700;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.name || p.id}</span>
-                            <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.3);">${isFa ? 'اکانت ۱' : 'Account 1'}</span>
-                            ${isAcc2 ? `
-                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);">${isFa ? 'اکانت ۲' : 'Account 2'}</span>
-                            ` : `
-                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(255,255,255,0.06);color:#94a3b8;">${isFa ? 'فقط اکانت ۱' : 'Account 1 Only'}</span>
-                            `}
+                      <div class="aqm-sw-card" style="padding:10px 14px;display:flex;flex-direction:column;gap:8px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                          <div style="flex:1;min-width:0;">
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                              <span style="font-size:12.5px;font-weight:700;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.name || p.id}</span>
+                              ${isNone ? `
+                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);">${isFa ? 'غیرفعال' : 'Disabled'}</span>
+                              ` : isAll ? `
+                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);">${isFa ? 'همه اکانت‌ها' : 'All Accounts'}</span>
+                              ` : `
+                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.3);">${assigned.length} ${isFa ? 'اکانت' : 'accounts'}</span>
+                              `}
+                            </div>
+                            <div style="font-size:10px;color:#64748b;font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" dir="ltr" title="${p.path || ''}">
+                              ${p.path || p.id}
+                            </div>
+                            <div style="font-size:10px;color:#94a3b8;margin-top:3px;">
+                              💬 ${(p.conversations || []).length || p.conversation_count || 0} ${isFa ? 'مکالمه' : 'chats'}
+                            </div>
                           </div>
-                          <div style="font-size:10px;color:#64748b;font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" dir="ltr" title="${p.path || ''}">
-                            ${p.path || p.id}
-                          </div>
-                          <div style="font-size:10px;color:#94a3b8;margin-top:3px;">
-                            💬 ${(p.conversations || []).length || p.conversation_count || 0} ${isFa ? 'مکالمه' : 'chats'}
+
+                          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+                            <button class="aqm-sw-btn aqm-proj-all-btn" data-pid="${p.id}" data-state="all" title="${isFa ? 'فعال برای تمام حساب‌ها' : 'Enable for all accounts'}" style="padding:3px 7px;font-size:10px;color:#10b981;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);">
+                              <span>✓ ${isFa ? 'همه' : 'All'}</span>
+                            </button>
+                            <button class="aqm-sw-btn aqm-proj-all-btn" data-pid="${p.id}" data-state="none" title="${isFa ? 'غیرفعال برای همه' : 'Disable for all'}" style="padding:3px 7px;font-size:10px;color:#f87171;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);">
+                              <span>✕ ${isFa ? 'هیچکدام' : 'None'}</span>
+                            </button>
+                            <button class="aqm-sw-btn aqm-proj-sync-btn" data-pid="${p.id}" title="${t.syncNow || 'Sync'}" style="padding:3px 8px;font-size:10.5px;">
+                              <span>🔄</span>
+                              <span>${isFa ? 'سینک' : 'Sync'}</span>
+                            </button>
                           </div>
                         </div>
 
-                        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-                          <label style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:#cbd5e1;cursor:pointer;background:rgba(255,255,255,0.04);padding:4px 9px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);">
-                            <input type="checkbox" class="aqm-proj-toggle-cb" data-pid="${p.id}" ${isAcc2 ? 'checked' : ''} style="width:14px;height:14px;accent-color:#10b981;cursor:pointer;" />
-                            <span>${t.assignToAcc2}</span>
-                          </label>
-                          <button class="aqm-sw-btn aqm-proj-sync-btn" data-pid="${p.id}" title="${t.syncNow}" style="padding:4px 9px;font-size:11px;">
-                            <span>🔄</span>
-                            <span>${isFa ? 'سینک' : 'Sync'}</span>
-                          </button>
-                          <button class="aqm-sw-btn aqm-proj-unlink-btn" data-pid="${p.id}" title="${t.unlinkFromAcc2}" style="padding:4px 9px;font-size:11px;color:#f87171;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);">
-                            <span>✕</span>
-                            <span>${isFa ? 'جداسازی' : (swLang === 'es' ? 'Desvincular' : 'Unlink')}</span>
-                          </button>
+                        <!-- Account Assignment Chips Matrix -->
+                        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-top:4px;border-top:1px solid rgba(255,255,255,0.05);">
+                          <span style="font-size:10px;color:#64748b;margin-left:2px;">${isFa ? 'تخصیص اکانت:' : 'Assign:'}</span>
+                          ${savedKeys.map(k => {
+                            const isAssigned = assigned.includes(k.toLowerCase()) || (assigned.includes('instance_1') && k === savedKeys[0]);
+                            const accShort = getCleanUserDisplayName(swState.savedAccounts[k]?.name, k);
+                            return `
+                              <button class="aqm-proj-acc-chip" data-pid="${p.id}" data-acc="${k}" data-assigned="${isAssigned}" style="padding:2px 8px;border-radius:9999px;font-size:10px;font-weight:600;cursor:pointer;transition:all 0.15s ease;display:inline-flex;align-items:center;gap:4px;background:${isAssigned ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.05)'};color:${isAssigned ? '#10b981' : '#94a3b8'};border:1px solid ${isAssigned ? 'rgba(16,185,129,0.4)' : 'rgba(255,255,255,0.1)'};">
+                                <span>${isAssigned ? '✓' : '+'}</span>
+                                <span>${accShort}</span>
+                              </button>
+                            `;
+                          }).join('')}
                         </div>
                       </div>
                     `;
@@ -3476,8 +3551,18 @@
           ` : swTab === 'tasks' ? `
             <!-- TASKS TAB -->
             <div style="display:flex;flex-direction:column;gap:10px;">
-              <div style="font-size:11px;color:#94a3b8;line-height:1.5;padding:0 2px;">
-                ${t.tasksDesc}
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 2px;">
+                <div style="font-size:11px;color:#94a3b8;line-height:1.5;">
+                  ${t.tasksDesc || (isFa ? 'مدیریت و تفکیک تسک‌های خودکار و زمان‌بندی شده برای هر حساب' : 'Manage and isolate automated tasks per account')}
+                </div>
+                <div style="display:flex;gap:6px;flex-shrink:0;">
+                  <button class="aqm-sw-btn" id="aqm-task-allow-all-btn" style="padding:3px 8px;font-size:10.5px;color:#10b981;border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.08);" title="${isFa ? 'فعال‌سازی همه تسک‌ها برای تمام حساب‌ها' : 'Enable all tasks for all accounts'}">
+                    ✓ ${isFa ? 'همه اکانت‌ها' : 'All Accounts'}
+                  </button>
+                  <button class="aqm-sw-btn" id="aqm-task-isolate-all-btn" style="padding:3px 8px;font-size:10.5px;color:#f87171;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);" title="${isFa ? 'غیرفعال‌سازی همه تسک‌ها' : 'Disable all tasks'}">
+                    ✕ ${isFa ? 'غیرفعال‌سازی همه' : 'Disable All'}
+                  </button>
+                </div>
               </div>
               ${tasksList.length === 0 ? `
                 <div class="aqm-sw-card" style="text-align:center;padding:24px 14px;border-style:dashed;">
@@ -3486,57 +3571,64 @@
               ` : `
                 <div style="display:flex;flex-direction:column;gap:7px;max-height:360px;overflow-y:auto;" class="aqm-custom-scroll">
                   ${tasksList.map(task => {
-                    const isIso = !!task.isolated_from_account2;
-                    const isEn = !!task.enabled;
-                    const owner = (task.owner_account || '').toLowerCase();
-                    const isOwnerAcc1 = !owner || owner === 'instance_1' || !owner.includes('instance_2');
-                    const isLockedInInst2 = isInstance2Window() && isIso && isOwnerAcc1;
+                    const assigned = (task.assigned_accounts || []).map(a => String(a).toLowerCase().trim());
+                    const isEn = !!task.enabled && !task.disabled_all;
+                    const isAll = !!task.enabled_all || (savedKeys.length > 0 && savedKeys.every(k => assigned.includes(k.toLowerCase())));
+                    const isNone = !!task.disabled_all || assigned.length === 0;
                     return `
-                      <div class="aqm-sw-card" style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;${isLockedInInst2 ? 'border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.03);' : (isIso ? 'border-color:rgba(251,191,36,0.25);background:rgba(251,191,36,0.02);' : '')}">
-                        <div style="flex:1;min-width:0;">
-                          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
-                            <span style="font-size:12.5px;font-weight:700;color:#f8fafc;">${task.task_name}</span>
-                            ${isEn ? `
-                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);">● ${t.taskEnabled}</span>
-                            ` : `
-                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(255,255,255,0.06);color:#94a3b8;">○ ${t.taskDisabled}</span>
-                            `}
-                            ${isLockedInInst2 ? `
-                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);">${t.taskLockedBadge || '🔒 قفل شده در اکانت ۱'}</span>
-                            ` : isIso ? `
-                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.3);">${t.taskIsolatedBadge}</span>
-                            ` : `
-                              <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.3);">${t.taskSharedBadge}</span>
-                            `}
+                      <div class="aqm-sw-card" style="padding:10px 14px;display:flex;flex-direction:column;gap:8px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                          <div style="flex:1;min-width:0;">
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                              <span style="font-size:12.5px;font-weight:700;color:#f8fafc;">${task.task_name}</span>
+                              ${isEn ? `
+                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);">● ${t.taskEnabled || (isFa ? 'فعال' : 'Enabled')}</span>
+                              ` : `
+                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(255,255,255,0.06);color:#94a3b8;">○ ${t.taskDisabled || (isFa ? 'غیرفعال' : 'Disabled')}</span>
+                              `}
+                              ${isNone ? `
+                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);">${isFa ? 'متوقف برای همه' : 'All Disabled'}</span>
+                              ` : isAll ? `
+                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);">${isFa ? 'فعال در همه حساب‌ها' : 'All Accounts'}</span>
+                              ` : `
+                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.3);">${assigned.length} ${isFa ? 'اکانت' : 'accounts'}</span>
+                              `}
+                            </div>
+                            <div style="font-size:10.5px;color:#94a3b8;margin-bottom:2px;">
+                              ⏱ ${task.next_run || task.schedule || (isFa ? 'زمان‌بندی روزانه' : 'Daily Schedule')}
+                            </div>
+                            <div style="font-size:10px;color:#64748b;font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" dir="ltr" title="${task.description || task.command || ''}">
+                              ${task.description || task.command || ''}
+                            </div>
                           </div>
-                          <div style="font-size:10.5px;color:#94a3b8;margin-bottom:2px;">
-                            ⏱ ${task.schedule || task.trigger || (isFa ? 'زمان‌بندی روزانه' : 'Daily Schedule')}
-                          </div>
-                          <div style="font-size:10px;color:#64748b;font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" dir="ltr" title="${task.command || task.action || ''}">
-                            ${task.command || task.action || task.description || ''}
+
+                          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+                            <button class="aqm-sw-btn aqm-task-all-btn" data-task="${task.task_name}" data-state="all" title="${isFa ? 'فعال در تمام حساب‌ها' : 'Enable for all'}" style="padding:3px 7px;font-size:10px;color:#10b981;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);">
+                              <span>✓ ${isFa ? 'همه' : 'All'}</span>
+                            </button>
+                            <button class="aqm-sw-btn aqm-task-all-btn" data-task="${task.task_name}" data-state="none" title="${isFa ? 'غیرفعال برای همه' : 'Disable for all'}" style="padding:3px 7px;font-size:10px;color:#f87171;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);">
+                              <span>✕ ${isFa ? 'هیچکدام' : 'None'}</span>
+                            </button>
+                            <button class="aqm-sw-btn aqm-task-toggle-btn" data-task="${task.task_name}" data-enabled="${isEn}" title="${isEn ? (isFa ? 'توقف تسک' : 'Pause Task') : (isFa ? 'فعال‌سازی تسک' : 'Run Task')}" style="padding:3px 8px;font-size:10.5px;">
+                              <span>${isEn ? '⏸' : '▶'}</span>
+                              <span>${isEn ? (isFa ? 'توقف' : 'Pause') : (isFa ? 'فعال' : 'Enable')}</span>
+                            </button>
                           </div>
                         </div>
 
-                        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-                          <button class="aqm-sw-btn aqm-task-toggle-btn" 
-                            data-task="${task.task_name}" 
-                            data-enabled="${isEn}" 
-                            data-locked="${isLockedInInst2}" 
-                            ${isLockedInInst2 ? 'disabled' : ''} 
-                            title="${isLockedInInst2 ? t.taskLockedMsg : (isEn ? (isFa ? 'غیرفعال‌سازی تسک' : 'Disable Task') : (isFa ? 'فعال‌سازی تسک' : 'Enable Task'))}" 
-                            style="padding:4px 9px;font-size:11px;${isLockedInInst2 ? 'opacity:0.4;cursor:not-allowed;' : ''}">
-                            <span>${isEn ? '⏸' : '▶'}</span>
-                            <span>${isEn ? (isFa ? 'غیرفعال‌سازی' : 'Disable') : (isFa ? 'فعال‌سازی' : 'Enable')}</span>
-                          </button>
-                          <button class="aqm-sw-btn ${isIso ? '' : 'aqm-sw-btn-primary'} aqm-task-isolate-btn" 
-                            data-task="${task.task_name}" 
-                            data-isolated="${isIso}" 
-                            data-locked="${isLockedInInst2}" 
-                            ${isLockedInInst2 ? 'disabled' : ''} 
-                            title="${isLockedInInst2 ? t.taskLockedMsg : (isIso ? t.unisolateTaskBtn : t.isolateTaskBtn)}" 
-                            style="padding:4px 10px;font-size:11px;${isLockedInInst2 ? 'opacity:0.4;cursor:not-allowed;' : ''}">
-                            <span>${isIso ? t.unisolateTaskBtn : t.isolateTaskBtn}</span>
-                          </button>
+                        <!-- Account Assignment Chips Matrix -->
+                        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-top:4px;border-top:1px solid rgba(255,255,255,0.05);">
+                          <span style="font-size:10px;color:#64748b;margin-left:2px;">${isFa ? 'اکانت‌های مجاز:' : 'Assigned:'}</span>
+                          ${savedKeys.map(k => {
+                            const isAssigned = assigned.includes(k.toLowerCase()) || (assigned.includes('instance_1') && k === savedKeys[0]);
+                            const accShort = getCleanUserDisplayName(swState.savedAccounts[k]?.name, k);
+                            return `
+                              <button class="aqm-task-acc-chip" data-task="${task.task_name}" data-acc="${k}" data-assigned="${isAssigned}" style="padding:2px 8px;border-radius:9999px;font-size:10px;font-weight:600;cursor:pointer;transition:all 0.15s ease;display:inline-flex;align-items:center;gap:4px;background:${isAssigned ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.05)'};color:${isAssigned ? '#10b981' : '#94a3b8'};border:1px solid ${isAssigned ? 'rgba(16,185,129,0.4)' : 'rgba(255,255,255,0.1)'};">
+                                <span>${isAssigned ? '✓' : '+'}</span>
+                                <span>${accShort}</span>
+                              </button>
+                            `;
+                          }).join('')}
                         </div>
                       </div>
                     `;
@@ -3853,9 +3945,10 @@
         btn.disabled = true;
         setTimeout(() => { try { btn.disabled = false; } catch(err){} }, 3000);
 
-        showSwitcherToast(t.dualLaunching || (isFa ? 'در حال اجرای پنجره دوم آنتی‌گرویتی...' : 'Launching 2nd Antigravity instance...'));
+        showSwitcherToast(t.dualLaunching || (isFa ? 'در حال اجرای پنجره آنتی‌گرویتی...' : 'Launching Antigravity instance...'));
 
         if (callDaemonIpc('launch_dual', { accountKey: accKey })) {
+          setTimeout(() => { fetchSwitcherState(() => { renderSwitcherModal(); }); }, 1500);
           return;
         }
 
@@ -3885,7 +3978,8 @@
             return;
           }
           if (res && res.success) {
-            showSwitcherToast(res.msg || t.dualLaunched || (isFa ? 'پنجره دوم با موفقیت اجرا شد!' : '2nd instance started successfully!'));
+            showSwitcherToast(res.msg || t.dualLaunched || (isFa ? 'پنجره آنتی‌گرویتی با موفقیت فعال شد!' : 'Antigravity instance started successfully!'));
+            fetchSwitcherState(() => { renderSwitcherModal(); });
           } else if (res && res.error) {
             showSwitcherToast(res.error, true);
           }
@@ -3923,15 +4017,17 @@
     const allowAllBtn = modal.querySelector('#aqm-proj-allow-all-btn');
     if (allowAllBtn) {
       allowAllBtn.onclick = async () => {
-        showSwitcherToast(isFa ? 'در حال فعال‌سازی تمام پروژه‌ها برای اکانت ۲...' : 'Allowing all projects in Account 2...');
+        showSwitcherToast(isFa ? 'در حال فعال‌سازی تمام پروژه‌ها برای همه حساب‌ها...' : 'Enabling all projects for all accounts...');
         for (const p of projectsList) {
-          await fetch('http://127.0.0.1:39281/api/project_assign', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ projectId: p.id, account: 'instance_2', enabled: true })
-          }).catch(() => {});
+          if (!callDaemonIpc('toggleProjectAll', { projectId: p.id, state: 'all' })) {
+            await fetch('http://127.0.0.1:39281/api/project_toggle_all', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ projectId: p.id, state: 'all' })
+            }).catch(() => {});
+          }
         }
-        showSwitcherToast(isFa ? 'تمام پروژه‌ها برای اکانت ۲ فعال شدند' : 'All projects allowed in Account 2');
+        showSwitcherToast(isFa ? 'تمام پروژه‌ها برای تمام حساب‌ها فعال شدند' : 'All projects enabled for all accounts');
         applyConversationIsolationFilter();
         fetchSwitcherState(() => renderSwitcherModal());
       };
@@ -3940,43 +4036,73 @@
     const isolateAllBtn = modal.querySelector('#aqm-proj-isolate-all-btn');
     if (isolateAllBtn) {
       isolateAllBtn.onclick = async () => {
-        showSwitcherToast(isFa ? 'در حال جداسازی تمام پروژه‌ها از اکانت ۲...' : 'Isolating all projects to Account 1...');
+        showSwitcherToast(isFa ? 'در حال غیرفعال‌سازی همه پروژه‌ها...' : 'Disabling all projects...');
         for (const p of projectsList) {
-          await fetch('http://127.0.0.1:39281/api/project_unlink', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ projectId: p.id, account: 'instance_2' })
-          }).catch(() => {});
+          if (!callDaemonIpc('toggleProjectAll', { projectId: p.id, state: 'none' })) {
+            await fetch('http://127.0.0.1:39281/api/project_toggle_all', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ projectId: p.id, state: 'none' })
+            }).catch(() => {});
+          }
         }
-        showSwitcherToast(isFa ? 'تمام پروژه‌ها از اکانت ۲ جدا شدند' : 'All projects isolated from Account 2');
+        showSwitcherToast(isFa ? 'همه پروژه‌ها غیرفعال شدند' : 'All projects disabled');
         applyConversationIsolationFilter();
         fetchSwitcherState(() => renderSwitcherModal());
       };
     }
 
-    modal.querySelectorAll('.aqm-proj-toggle-cb').forEach(cb => {
-      cb.onchange = () => {
-        const pid = cb.getAttribute('data-pid');
-        const en = cb.checked;
-        showSwitcherToast(isFa ? 'در حال به‌روزرسانی دسترسی پروژه...' : 'Updating project access...');
-        const endpoint = en ? '/api/project_assign' : '/api/project_unlink';
-        const payload = en ? { projectId: pid, account: 'instance_2', enabled: true } : { projectId: pid, account: 'instance_2' };
-        fetch(`http://127.0.0.1:39281${endpoint}`, {
+    modal.querySelectorAll('.aqm-proj-all-btn').forEach(btn => {
+      btn.onclick = () => {
+        const pid = btn.getAttribute('data-pid');
+        const st = btn.getAttribute('data-state');
+        showSwitcherToast(isFa ? 'در حال به‌روزرسانی پروژه...' : 'Updating project...');
+        if (callDaemonIpc('toggleProjectAll', { projectId: pid, state: st })) {
+          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
+          return;
+        }
+        fetch('http://127.0.0.1:39281/api/project_toggle_all', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify({ projectId: pid, state: st })
         })
         .then(r => r.json())
         .then(res => {
           if (res && res.success) {
             showSwitcherToast(isFa ? 'پروژه با موفقیت به‌روزرسانی شد' : 'Project updated');
             applyConversationIsolationFilter();
-            fetchSwitcherState(() => { renderSwitcherModal(); });
-          } else {
-            showSwitcherToast(res.error || 'Error', true);
+            fetchSwitcherState(() => renderSwitcherModal());
           }
+        }).catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
+      };
+    });
+
+    modal.querySelectorAll('.aqm-proj-acc-chip').forEach(btn => {
+      btn.onclick = () => {
+        const pid = btn.getAttribute('data-pid');
+        const acc = btn.getAttribute('data-acc');
+        const isAssigned = btn.getAttribute('data-assigned') === 'true';
+        const nextState = !isAssigned;
+        showSwitcherToast(isFa ? `تغییر دسترسی ${acc}...` : `Updating access for ${acc}...`);
+        if (callDaemonIpc('assignProject', { projectId: pid, accounts: acc, enabled: nextState })) {
+          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
+          return;
+        }
+        fetch('http://127.0.0.1:39281/api/project_assign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: pid, accounts: acc, enabled: nextState })
         })
-        .catch(() => {
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? 'دسترسی پروژه به‌روزرسانی شد' : 'Project access updated');
+            applyConversationIsolationFilter();
+            fetchSwitcherState(() => renderSwitcherModal());
+          }
+        }).catch(() => {
           showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
         });
       };
@@ -3985,7 +4111,7 @@
     modal.querySelectorAll('.aqm-proj-sync-btn').forEach(btn => {
       btn.onclick = () => {
         const pid = btn.getAttribute('data-pid');
-        showSwitcherToast(isFa ? 'در حال سینک پروژه به اکانت ۲...' : 'Syncing project to Account 2...');
+        showSwitcherToast(isFa ? 'در حال سینک پروژه...' : 'Syncing project...');
         fetch('http://127.0.0.1:39281/api/project_sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3994,36 +4120,9 @@
         .then(r => r.json())
         .then(res => {
           if (res && res.success) {
-            showSwitcherToast(isFa ? 'پروژه با اکانت ۲ همگام‌سازی شد' : 'Project synced to Account 2');
+            showSwitcherToast(isFa ? 'پروژه همگام‌سازی شد' : 'Project synced');
             applyConversationIsolationFilter();
-            fetchSwitcherState(() => { renderSwitcherModal(); });
-          } else {
-            showSwitcherToast(res.error || 'Error', true);
-          }
-        })
-        .catch(() => {
-          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
-        });
-      };
-    });
-
-    modal.querySelectorAll('.aqm-proj-unlink-btn').forEach(btn => {
-      btn.onclick = () => {
-        const pid = btn.getAttribute('data-pid');
-        showSwitcherToast(isFa ? 'در حال جداسازی پروژه از اکانت ۲...' : 'Unlinking project from Account 2...');
-        fetch('http://127.0.0.1:39281/api/project_unlink', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ projectId: pid, account: 'instance_2' })
-        })
-        .then(r => r.json())
-        .then(res => {
-          if (res && res.success) {
-            showSwitcherToast(isFa ? 'پروژه با موفقیت از اکانت ۲ جدا شد' : 'Project unlinked from Account 2');
-            applyConversationIsolationFilter();
-            fetchSwitcherState(() => { renderSwitcherModal(); });
-          } else {
-            showSwitcherToast(res.error || 'Error', true);
+            fetchSwitcherState(() => renderSwitcherModal());
           }
         })
         .catch(() => {
@@ -4033,12 +4132,98 @@
     });
 
     // Tasks Tab Actions
-    modal.querySelectorAll('.aqm-task-toggle-btn').forEach(btn => {
+    const taskAllowAllBtn = modal.querySelector('#aqm-task-allow-all-btn');
+    if (taskAllowAllBtn) {
+      taskAllowAllBtn.onclick = async () => {
+        showSwitcherToast(isFa ? 'در حال فعال‌سازی تمام تسک‌ها برای تمام حساب‌ها...' : 'Enabling all tasks for all accounts...');
+        for (const task of tasksList) {
+          if (!callDaemonIpc('toggleTaskAll', { taskName: task.task_name, state: 'all' })) {
+            await fetch('http://127.0.0.1:39281/api/task_toggle_all', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ taskName: task.task_name, state: 'all' })
+            }).catch(() => {});
+          }
+        }
+        showSwitcherToast(isFa ? 'تمام تسک‌ها برای تمام حساب‌ها فعال شدند' : 'All tasks enabled for all accounts');
+        fetchSwitcherState(() => renderSwitcherModal());
+      };
+    }
+
+    const taskIsolateAllBtn = modal.querySelector('#aqm-task-isolate-all-btn');
+    if (taskIsolateAllBtn) {
+      taskIsolateAllBtn.onclick = async () => {
+        showSwitcherToast(isFa ? 'در حال متوقف کردن تمام تسک‌ها...' : 'Disabling all tasks...');
+        for (const task of tasksList) {
+          if (!callDaemonIpc('toggleTaskAll', { taskName: task.task_name, state: 'none' })) {
+            await fetch('http://127.0.0.1:39281/api/task_toggle_all', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ taskName: task.task_name, state: 'none' })
+            }).catch(() => {});
+          }
+        }
+        showSwitcherToast(isFa ? 'تمام تسک‌ها متوقف شدند' : 'All tasks disabled');
+        fetchSwitcherState(() => renderSwitcherModal());
+      };
+    }
+
+    modal.querySelectorAll('.aqm-task-all-btn').forEach(btn => {
       btn.onclick = () => {
-        if (btn.getAttribute('data-locked') === 'true' || btn.hasAttribute('disabled')) {
-          showSwitcherToast(t.taskLockedMsg || (isFa ? 'این تسک متعلق به اکانت اصلی است و از اکانت ۲ قابل تغییر نیست.' : 'This task belongs to Account 1 and cannot be modified from Account 2.'), true);
+        const tname = btn.getAttribute('data-task');
+        const st = btn.getAttribute('data-state');
+        showSwitcherToast(isFa ? 'در حال به‌روزرسانی تسک...' : 'Updating task...');
+        if (callDaemonIpc('toggleTaskAll', { taskName: tname, state: st })) {
+          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
           return;
         }
+        fetch('http://127.0.0.1:39281/api/task_toggle_all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskName: tname, state: st })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? 'وضعیت تسک با موفقیت تغییر کرد' : 'Task updated');
+            fetchSwitcherState(() => renderSwitcherModal());
+          }
+        }).catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
+      };
+    });
+
+    modal.querySelectorAll('.aqm-task-acc-chip').forEach(btn => {
+      btn.onclick = () => {
+        const tname = btn.getAttribute('data-task');
+        const acc = btn.getAttribute('data-acc');
+        const isAssigned = btn.getAttribute('data-assigned') === 'true';
+        const nextState = !isAssigned;
+        showSwitcherToast(isFa ? `تغییر انتساب ${acc}...` : `Updating assignment for ${acc}...`);
+        if (callDaemonIpc('assignTask', { taskName: tname, accounts: acc, enabled: nextState })) {
+          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
+          return;
+        }
+        fetch('http://127.0.0.1:39281/api/task_assign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskName: tname, accounts: acc, enabled: nextState })
+        })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) {
+            showSwitcherToast(isFa ? 'انتساب تسک به‌روزرسانی شد' : 'Task assignment updated');
+            fetchSwitcherState(() => renderSwitcherModal());
+          }
+        }).catch(() => {
+          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
+        });
+      };
+    });
+
+    modal.querySelectorAll('.aqm-task-toggle-btn').forEach(btn => {
+      btn.onclick = () => {
         const tname = btn.getAttribute('data-task');
         const curEn = btn.getAttribute('data-enabled') === 'true';
         showSwitcherToast(isFa ? 'در حال تغییر وضعیت تسک...' : 'Toggling task state...');
@@ -4059,40 +4244,6 @@
             fetchSwitcherState(() => { renderSwitcherModal(); });
           } else {
             showSwitcherToast(res.error || (isFa ? 'عدم دسترسی به تغییر وضعیت تسک' : 'Access denied'), true);
-          }
-        })
-        .catch(() => {
-          showSwitcherToast(isFa ? 'خطا در ارتباط با سرور' : 'Connection error', true);
-        });
-      };
-    });
-
-    modal.querySelectorAll('.aqm-task-isolate-btn').forEach(btn => {
-      btn.onclick = () => {
-        if (btn.getAttribute('data-locked') === 'true' || btn.hasAttribute('disabled')) {
-          showSwitcherToast(t.taskLockedMsg || (isFa ? 'تغییر وضعیت ایزولاسیون این تسک از اکانت ۲ مجاز نیست.' : 'Modifying isolation of this task from Account 2 is not permitted.'), true);
-          return;
-        }
-        const tname = btn.getAttribute('data-task');
-        const curIso = btn.getAttribute('data-isolated') === 'true';
-        showSwitcherToast(isFa ? 'در حال تغییر وضعیت ایزولاسیون تسک...' : 'Updating task isolation...');
-        const callerAcc = isInstance2Window() ? (window.__antigravity_account || 'instance_2') : email;
-        if (callDaemonIpc('isolateTask', { taskName: tname, isolate: !curIso, callerAccount: callerAcc })) {
-          setTimeout(() => fetchSwitcherState(() => renderSwitcherModal()), 300);
-          return;
-        }
-        fetch('http://127.0.0.1:39281/api/task_isolate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskName: tname, isolate: !curIso, callerAccount: callerAcc })
-        })
-        .then(r => r.json())
-        .then(res => {
-          if (res && res.success) {
-            showSwitcherToast(isFa ? 'ایزولاسیون تسک به‌روزرسانی شد' : 'Task isolation updated');
-            fetchSwitcherState(() => { renderSwitcherModal(); });
-          } else {
-            showSwitcherToast(res.error || 'Error', true);
           }
         })
         .catch(() => {
@@ -4216,45 +4367,71 @@
 
   function renderBadge() {
     const trigger = document.querySelector('[data-testid="model-selector-trigger"]');
-    if (!trigger) return;
-
     const theme = getActiveTheme();
     const { fontEn, fontFa, fullFamily } = getEffectiveFonts(theme);
 
+    let dock = document.getElementById('antigravity-quota-dock');
+
     // 1. Precision Trigger Badge
     let badge = document.getElementById('antigravity-usage-badge');
-    if (!badge) {
-      badge = document.createElement('div');
-      badge.id = 'antigravity-usage-badge';
-      const svg = trigger.querySelector('svg');
-      if (svg && svg.parentNode) {
-        try {
-          svg.parentNode.insertBefore(badge, svg);
-        } catch (e) {
+    if (trigger) {
+      if (dock) dock.style.display = 'none';
+      if (!badge) {
+        badge = document.createElement('div');
+        badge.id = 'antigravity-usage-badge';
+        const svg = trigger.querySelector('svg');
+        if (svg && svg.parentNode) {
+          try {
+            svg.parentNode.insertBefore(badge, svg);
+          } catch (e) {
+            trigger.appendChild(badge);
+          }
+        } else {
           trigger.appendChild(badge);
         }
+      }
+      badge.style.display = 'inline-flex';
+      badge.style.alignItems = 'center';
+      badge.style.gap = '6px';
+      badge.style.marginLeft = '6px';
+      badge.style.marginRight = '2px';
+      badge.style.padding = '2px 8px';
+      badge.style.borderRadius = '9999px';
+      badge.style.fontSize = '11px';
+      badge.style.fontWeight = '700';
+      badge.style.fontFamily = `'JetBrains Mono', ${fullFamily}`;
+      badge.style.background = theme.chipBg;
+      badge.style.border = `1px solid ${theme.cardBorder}`;
+      badge.style.color = theme.accent;
+      badge.style.cursor = 'default';
+      badge.style.pointerEvents = 'none';
+      badge.style.userSelect = 'none';
+      badge.style.transition = 'all 0.2s ease';
+      badge.style.boxShadow = `0 1px 4px rgba(0,0,0,0.2)`;
+    } else {
+      if (badge) badge.remove();
+      if (!dock) {
+        dock = document.createElement('div');
+        dock.id = 'antigravity-quota-dock';
+        dock.style.position = 'fixed';
+        dock.style.bottom = '18px';
+        dock.style.right = '24px';
+        dock.style.zIndex = '999998';
+        dock.style.display = 'flex';
+        dock.style.alignItems = 'center';
+        dock.style.gap = '8px';
+        dock.style.padding = '4px 6px';
+        dock.style.borderRadius = '9999px';
+        dock.style.background = 'rgba(15, 23, 42, 0.72)';
+        dock.style.backdropFilter = 'blur(12px)';
+        dock.style.webkitBackdropFilter = 'blur(12px)';
+        dock.style.border = '1px solid rgba(255, 255, 255, 0.12)';
+        dock.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.45)';
+        (document.body || document.documentElement).appendChild(dock);
       } else {
-        trigger.appendChild(badge);
+        dock.style.display = 'flex';
       }
     }
-    badge.style.display = 'inline-flex';
-    badge.style.alignItems = 'center';
-    badge.style.gap = '6px';
-    badge.style.marginLeft = '6px';
-    badge.style.marginRight = '2px';
-    badge.style.padding = '2px 8px';
-    badge.style.borderRadius = '9999px';
-    badge.style.fontSize = '11px';
-    badge.style.fontWeight = '700';
-    badge.style.fontFamily = `'JetBrains Mono', ${fullFamily}`;
-    badge.style.background = theme.chipBg;
-    badge.style.border = `1px solid ${theme.cardBorder}`;
-    badge.style.color = theme.accent;
-    badge.style.cursor = 'default';
-    badge.style.pointerEvents = 'none';
-    badge.style.userSelect = 'none';
-    badge.style.transition = 'all 0.2s ease';
-    badge.style.boxShadow = `0 1px 4px rgba(0,0,0,0.2)`;
 
     // 2. Floating Capsule Pill Button (Apple Dynamic Island Inspired)
     let pill = document.getElementById('antigravity-usage-pill');
@@ -4262,8 +4439,14 @@
       pill = document.createElement('button');
       pill.id = 'antigravity-usage-pill';
       pill.type = 'button';
+    }
+    if (trigger) {
       const wrapper = trigger.closest('.no-focus-agent-input') || trigger.parentElement;
-      wrapper.insertAdjacentElement('afterend', pill);
+      if (pill.parentElement !== wrapper.parentElement) {
+        wrapper.insertAdjacentElement('afterend', pill);
+      }
+    } else if (dock && pill.parentElement !== dock) {
+      dock.appendChild(pill);
     }
     pill.style.display = 'inline-flex';
     pill.style.alignItems = 'center';
@@ -4297,16 +4480,18 @@
 
     const titleTooltip = `Gemini Quota HUD\n• 5-Hour: ${sessRem}% Remaining (${sessUsed}% Used) - Resets in: ${sessReset}\n• Weekly: ${weekRem}% Remaining (${weekUsed}% Used) - Resets in: ${weekReset}\nClick to view full HUD`;
 
-    const badgeSig = `${badgeSess}|${badgeWeek}|${theme.dotColor}|${theme.id}`;
-    if (badge.dataset.aqmSig !== badgeSig) {
-      badge.dataset.aqmSig = badgeSig;
-      badge.title = titleTooltip;
-      badge.innerHTML = `
-        <span style="width:5.5px;height:5.5px;border-radius:50%;background:${theme.dotColor};box-shadow:0 0 7px ${theme.dotColor};animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
-        <span dir="ltr">${badgeSess}%</span>
-        <span style="opacity:0.35;font-weight:400;margin:0 1px;">|</span>
-        <span style="opacity:0.85;font-size:10px;font-weight:600;" dir="ltr">W: ${badgeWeek}%</span>
-      `;
+    if (badge) {
+      const badgeSig = `${badgeSess}|${badgeWeek}|${theme.dotColor}|${theme.id}`;
+      if (badge.dataset.aqmSig !== badgeSig) {
+        badge.dataset.aqmSig = badgeSig;
+        badge.title = titleTooltip;
+        badge.innerHTML = `
+          <span style="width:5.5px;height:5.5px;border-radius:50%;background:${theme.dotColor};box-shadow:0 0 7px ${theme.dotColor};animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
+          <span dir="ltr">${badgeSess}%</span>
+          <span style="opacity:0.35;font-weight:400;margin:0 1px;">|</span>
+          <span style="opacity:0.85;font-size:10px;font-weight:600;" dir="ltr">W: ${badgeWeek}%</span>
+        `;
+      }
     }
 
     const pillSig = `${badgeSess}|${sessReset}|${isRefreshing}|${theme.dotColor}|${theme.id}`;
@@ -4331,7 +4516,13 @@
       accPill = document.createElement('button');
       accPill.id = 'antigravity-account-pill';
       accPill.type = 'button';
-      pill.insertAdjacentElement('afterend', accPill);
+    }
+    if (trigger) {
+      if (accPill.parentElement !== pill.parentElement) {
+        pill.insertAdjacentElement('afterend', accPill);
+      }
+    } else if (dock && accPill.parentElement !== dock) {
+      dock.appendChild(accPill);
     }
 
     accPill.style.display = 'inline-flex';
@@ -4356,8 +4547,11 @@
     try {
       designatedEmail = localStorage.getItem('antigravity:account_email') || window.__antigravity_account || (swState.activeAccount && swState.activeAccount.email) || (currentUsage && currentUsage.email) || '';
     } catch(e) {}
-    if (!designatedEmail) {
-      designatedEmail = isInst2 ? 'bombhub.apk@gmail.com' : 'madgod.cum@gmail.com';
+    if (!designatedEmail && swState.savedAccounts) {
+      const keys = Object.keys(swState.savedAccounts);
+      if (keys.length > 0) {
+        designatedEmail = (isInst2 ? (keys[1] || keys[0]) : keys[0]);
+      }
     }
 
     let targetKey = designatedEmail;
@@ -4365,14 +4559,11 @@
       const matchKey = Object.keys(swState.savedAccounts).find(k => k.toLowerCase() === targetKey.toLowerCase());
       if (matchKey) {
         targetKey = matchKey;
-      } else if (isInst2) {
-        const foundKey = Object.keys(swState.savedAccounts).find(e => isAccount2(e));
-        if (foundKey) targetKey = foundKey;
       }
     }
 
     const savedInfo = (swState.savedAccounts && swState.savedAccounts[targetKey]) || {};
-    let fallbackName = savedInfo.name || (targetKey ? (targetKey.split('@')[0].split('.')[0].charAt(0).toUpperCase() + targetKey.split('@')[0].split('.')[0].slice(1)) : (isInst2 ? 'Secondary' : 'Madgod'));
+    let fallbackName = savedInfo.name || (targetKey ? (targetKey.split('@')[0].split('.')[0].charAt(0).toUpperCase() + targetKey.split('@')[0].split('.')[0].slice(1)) : 'Account');
     let fallbackAvatar = savedInfo.avatar || '';
 
     let accUser = {
@@ -4403,8 +4594,8 @@
     const tierBadgeColor = accTierCode === 'ultra' ? '#ffffff' : (accTierCode === 'pro' ? '#fbbf24' : '#94a3b8');
     const tierBadgeBorder = accTierCode === 'ultra' ? 'rgba(236,72,153,0.5)' : (accTierCode === 'pro' ? 'rgba(251,191,36,0.45)' : 'rgba(148,163,184,0.25)');
 
-    const initialChar = accName ? accName.charAt(0).toUpperCase() : (isInst2 ? 'B' : 'M');
-    const initialAvatarHtml = `<span style="width:17px;height:17px;border-radius:50%;background:${isInst2 ? 'linear-gradient(135deg, #0ea5e9, #38bdf8)' : 'linear-gradient(135deg, #4285f4, #9b72cb)'};display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:#fff;font-weight:800;pointer-events:none;">${initialChar}</span>`;
+    const initialChar = accName ? accName.charAt(0).toUpperCase() : (targetKey ? targetKey.charAt(0).toUpperCase() : 'A');
+    const initialAvatarHtml = `<span style="width:17px;height:17px;border-radius:50%;background:linear-gradient(135deg, #4285f4, #9b72cb);display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:#fff;font-weight:800;pointer-events:none;">${initialChar}</span>`;
 
     const accPillSig = `${accEmail}|${accName}|${accAvatar}|${accTierCode}|${theme.pillBg}`;
     if (accPill.dataset.aqmSig !== accPillSig) {

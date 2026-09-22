@@ -131,31 +131,97 @@ DEFAULT_USER_SETTINGS = {
     "lang": "fa"
 }
 
-def load_user_settings():
+def load_user_settings(instance_id=None, account_email=None):
+    base = dict(DEFAULT_USER_SETTINGS)
     if USER_SETTINGS_PATH.exists():
         try:
             with open(USER_SETTINGS_PATH, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-                res = dict(DEFAULT_USER_SETTINGS)
-                res.update(saved)
-                return res
+                if isinstance(saved, dict):
+                    # Top-level defaults
+                    for k, v in saved.items():
+                        if k not in ("instances", "accounts"):
+                            base[k] = v
+                    # Check account-specific override
+                    if account_email and "accounts" in saved and isinstance(saved["accounts"], dict):
+                        acc_settings = saved["accounts"].get(account_email) or saved["accounts"].get(account_email.lower())
+                        if isinstance(acc_settings, dict):
+                            base.update(acc_settings)
+                    # Check instance-specific override (highest precedence for an active window)
+                    if instance_id and "instances" in saved and isinstance(saved["instances"], dict):
+                        inst_settings = saved["instances"].get(instance_id)
+                        if isinstance(inst_settings, dict):
+                            base.update(inst_settings)
+                    return base
         except Exception:
             pass
-    return dict(DEFAULT_USER_SETTINGS)
+    return base
 
-def save_user_settings(patch):
+def save_user_settings(patch, instance_id=None, account_email=None):
     try:
-        cur = load_user_settings()
+        raw = {}
+        if USER_SETTINGS_PATH.exists():
+            try:
+                with open(USER_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            except Exception:
+                raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+            
+        if "instances" not in raw or not isinstance(raw["instances"], dict):
+            raw["instances"] = {}
+        if "accounts" not in raw or not isinstance(raw["accounts"], dict):
+            raw["accounts"] = {}
+
+        # Extract instance_id and account from patch if passed inside patch
         if isinstance(patch, dict):
-            cur.update(patch)
+            if not instance_id and patch.get("instance_id"):
+                instance_id = patch.get("instance_id")
+            if not account_email and patch.get("account"):
+                account_email = patch.get("account")
+
+        clean_patch = {k: v for k, v in patch.items() if k not in ("instance_id", "account")} if isinstance(patch, dict) else {}
+
+        # Update instance-specific settings
+        if instance_id:
+            inst_cur = raw["instances"].get(instance_id, {})
+            if not isinstance(inst_cur, dict):
+                inst_cur = {}
+            inst_cur.update(clean_patch)
+            raw["instances"][instance_id] = inst_cur
+
+        # Update account-specific settings
+        if account_email:
+            acc_cur = raw["accounts"].get(account_email, {})
+            if not isinstance(acc_cur, dict):
+                acc_cur = {}
+            acc_cur.update(clean_patch)
+            raw["accounts"][account_email] = acc_cur
+
+        # Also update top-level defaults for backward compatibility
+        for k, v in clean_patch.items():
+            raw[k] = v
+
         USER_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(USER_SETTINGS_PATH, "w", encoding="utf-8") as f:
-            json.dump(cur, f, indent=2, ensure_ascii=False)
-        return True, cur
+            json.dump(raw, f, indent=2, ensure_ascii=False)
+            
+        resolved = load_user_settings(instance_id=instance_id, account_email=account_email)
+        return True, resolved
     except Exception as e:
         return False, str(e)
 
+
 def get_primary_account():
+    try:
+        tok = quota_engine.get_keychain_token()
+        if tok:
+            em = quota_engine.extract_token_email(tok)
+            if em:
+                return em
+    except Exception:
+        pass
     try:
         man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
         if man_path.exists():
@@ -188,7 +254,7 @@ def is_account2(email):
     norm = str(email).lower().strip()
     if norm in ('instance_2', 'secondary_account') or 'account2' in norm:
         return True
-    return norm != str(PRIMARY_ACCOUNT).lower().strip() and norm != 'madgod.cum@gmail.com'
+    return norm != str(get_primary_account()).lower().strip()
 
 def get_instance_active_account(instance_id="instance_1"):
     home = Path.home()
@@ -202,27 +268,80 @@ def get_instance_active_account(instance_id="instance_1"):
         except Exception:
             pass
 
-    if instance_id == "instance_2":
-        f2 = home / ".gemini" / "accounts" / "active_instance_2.txt"
-        if f2.exists():
+    # Check manifest for explicit instance_id assignment first
+    for email, data in saved_manifest.items():
+        if isinstance(data, dict) and data.get("instance_id") == instance_id:
+            return email
+
+    if instance_id != "instance_1":
+        # Check active_<instance_id>.txt
+        f_inst = home / ".gemini" / "accounts" / f"active_{instance_id}.txt"
+        if f_inst.exists():
             try:
-                acc = f2.read_text(encoding="utf-8").strip()
+                acc = f_inst.read_text(encoding="utf-8").strip()
                 if acc and (not saved_manifest or acc in saved_manifest):
                     return acc
             except Exception:
                 pass
-        st2 = appdata / "Antigravity-Instance2" / "app_storage.json"
-        if st2.exists():
+
+        # Check instance app_storage.json
+        num = "".join(filter(str.isdigit, instance_id))
+        dir_name = f"Antigravity-Instance{num}" if num else f"Antigravity-{instance_id}"
+        st_file = appdata / dir_name / "app_storage.json"
+        if st_file.exists():
             try:
-                with open(st2, "r", encoding="utf-8") as f:
+                with open(st_file, "r", encoding="utf-8") as f:
                     acc = json.load(f).get("antigravity:account_email")
                     if acc and (not saved_manifest or acc in saved_manifest):
                         return acc
             except Exception:
                 pass
-        return next((k for k in saved_manifest if k != PRIMARY_ACCOUNT), SECONDARY_ACCOUNT)
+
+        # Match by order from manifest keys if not assigned
+        if num and num.isdigit():
+            idx = int(num) - 1  # instance_2 -> index 1, instance_3 -> index 2
+            m_keys = list(saved_manifest.keys())
+            if idx < len(m_keys):
+                return m_keys[idx]
+
+        return get_secondary_account()
 
     # For instance_1:
+    # 1. Primary Source of Truth: Check live token in Windows Credential Manager / Keychain
+    try:
+        import server as srv_mod
+        if not getattr(srv_mod, 'is_dual_launching', lambda: False)():
+            tok = quota_engine.get_keychain_token()
+            if tok:
+                token_em = quota_engine.extract_token_email(tok)
+                if not token_em:
+                    q = quota_engine.fetch_quota_and_tier(tok)
+                    token_em = q.get("email") if q else None
+                if token_em:
+                    # Keep active_instance_1.txt and app_storage synchronized with live token
+                    try:
+                        f1 = home / ".gemini" / "accounts" / "active_instance_1.txt"
+                        f1.parent.mkdir(parents=True, exist_ok=True)
+                        f1.write_text(token_em, encoding="utf-8")
+                    except Exception:
+                        pass
+                    try:
+                        st1 = appdata / "Antigravity" / "app_storage.json"
+                        s_data = {}
+                        if st1.exists():
+                            with open(st1, "r", encoding="utf-8") as sf:
+                                s_data = json.load(sf)
+                        if s_data.get("antigravity:account_email") != token_em:
+                            s_data["antigravity:account_email"] = token_em
+                            with open(st1, "w", encoding="utf-8") as sf:
+                                json.dump(s_data, sf, indent=2)
+                    except Exception:
+                        pass
+                    return token_em
+    except Exception:
+        pass
+
+    # 2. Fallback to active_instance_1.txt
     f1 = home / ".gemini" / "accounts" / "active_instance_1.txt"
     if f1.exists():
         try:
@@ -232,6 +351,7 @@ def get_instance_active_account(instance_id="instance_1"):
         except Exception:
             pass
 
+    # 3. Fallback to app_storage.json
     st1 = appdata / "Antigravity" / "app_storage.json"
     if st1.exists():
         try:
@@ -242,16 +362,7 @@ def get_instance_active_account(instance_id="instance_1"):
         except Exception:
             pass
 
-    try:
-        tok = quota_engine.get_keychain_token()
-        if tok:
-            q = quota_engine.fetch_quota_and_tier(tok)
-            if q and q.get("email") and (not saved_manifest or q["email"] in saved_manifest):
-                return q["email"]
-    except Exception:
-        pass
-
-    return PRIMARY_ACCOUNT
+    return get_primary_account()
 
 def is_port_open(port, host="127.0.0.1", timeout=0.5):
     try:
@@ -263,27 +374,53 @@ def is_port_open(port, host="127.0.0.1", timeout=0.5):
 def get_devtools_targets():
     home = Path.home()
     appdata = Path(os.getenv("APPDATA", str(home / "AppData" / "Roaming")))
-    candidates = [
-        {"instance_id": "instance_1", "path": DEVTOOLS_PORT_PATH, "account": get_instance_active_account("instance_1")},
-        {"instance_id": "instance_2", "path": appdata / "Antigravity-Instance2" / "DevToolsActivePort", "account": get_instance_active_account("instance_2")}
-    ]
     targets = []
-    for c in candidates:
-        p = c["path"]
-        if p.exists():
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    lines = f.read().strip().split("\n")
-                    if lines:
-                        val = int(lines[0])
-                        if is_port_open(val):
-                            targets.append({
-                                "instance_id": c["instance_id"],
-                                "port": val,
-                                "default_account": c["account"]
-                            })
-            except Exception:
-                pass
+    seen_ports = set()
+
+    # 1. Primary instance (Instance 1)
+    if DEVTOOLS_PORT_PATH.exists():
+        try:
+            with open(DEVTOOLS_PORT_PATH, "r", encoding="utf-8") as f:
+                lines = f.read().strip().split("\n")
+                if lines:
+                    val = int(lines[0])
+                    if is_port_open(val) and val not in seen_ports:
+                        seen_ports.add(val)
+                        targets.append({
+                            "instance_id": "instance_1",
+                            "port": val,
+                            "default_account": get_instance_active_account("instance_1")
+                        })
+        except Exception:
+            pass
+
+    # 2. Dynamic discovery for all secondary instances (Antigravity-Instance2, Instance3, etc.)
+    try:
+        for p in sorted(appdata.glob("Antigravity-Instance*")):
+            if not p.is_dir():
+                continue
+            dir_name = p.name
+            num = "".join(filter(str.isdigit, dir_name))
+            inst_id = f"instance_{num}" if num else dir_name.lower().replace("-", "_")
+            port_file = p / "DevToolsActivePort"
+            if port_file.exists():
+                try:
+                    with open(port_file, "r", encoding="utf-8") as f:
+                        lines = f.read().strip().split("\n")
+                        if lines:
+                            val = int(lines[0])
+                            if is_port_open(val) and val not in seen_ports:
+                                seen_ports.add(val)
+                                targets.append({
+                                    "instance_id": inst_id,
+                                    "port": val,
+                                    "default_account": get_instance_active_account(inst_id)
+                                })
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     return targets
 
 def get_all_devtools_ports():
@@ -318,7 +455,12 @@ def get_injector_script(usage=None, instance_id="instance_1", account_email=None
             except Exception:
                 pass
 
-        instance_usage = usage
+        instance_usage = None
+        if usage and usage.get("email") and str(usage.get("email")).lower().strip() == str(actual_account).lower().strip():
+            instance_usage = usage
+        else:
+            instance_usage = get_account_profile_data(actual_account, manifest=saved_accounts)
+
         if not instance_usage or not instance_usage.get("email"):
             if actual_account in saved_accounts:
                 acc_entry = saved_accounts[actual_account]
@@ -329,20 +471,11 @@ def get_injector_script(usage=None, instance_id="instance_1", account_email=None
                     "name": clean_name,
                     "tier": acc_entry.get("tier", "Google AI Pro"),
                     "tier_code": acc_entry.get("tier_code", "pro"),
-                    "session": {"name": "Gemini Models", "used_pct": round(100.0 - float(rem_pct), 1), "remaining_pct": round(float(rem_pct), 1), "resets_in": "Ready"}
+                    "session": {"name": "Gemini Models", "used_pct": round(100.0 - float(rem_pct), 1), "remaining_pct": round(float(rem_pct), 1), "resets_in": "Ready"},
+                    "weekly": {"name": "Weekly Limit", "used_pct": round(100.0 - float(rem_pct), 1), "remaining_pct": round(float(rem_pct), 1), "resets_in": "Ready"}
                 }
-        elif instance_id == "instance_2" and actual_account and instance_usage.get("email") != actual_account:
-            if actual_account in saved_accounts:
-                acc_entry = saved_accounts[actual_account]
-                clean_name = acc_entry.get("name") or (actual_account.split('@')[0].split('.')[0].capitalize() if '@' in str(actual_account) else "User")
-                rem_pct = acc_entry.get("remaining_pct", 100.0)
-                instance_usage = {
-                    "email": actual_account,
-                    "name": clean_name,
-                    "tier": acc_entry.get("tier", "Google AI Pro"),
-                    "tier_code": acc_entry.get("tier_code", "pro"),
-                    "session": {"name": "Gemini Models", "used_pct": round(100.0 - float(rem_pct), 1), "remaining_pct": round(float(rem_pct), 1), "resets_in": "Ready"}
-                }
+            elif usage:
+                instance_usage = usage
 
         usage_json = json.dumps(instance_usage or {}, ensure_ascii=False)
         allowed_convs = m_eng.get_allowed_conversations(actual_account) if hasattr(m_eng, 'get_allowed_conversations') else []
@@ -355,7 +488,7 @@ def get_injector_script(usage=None, instance_id="instance_1", account_email=None
         }, ensure_ascii=False)
         saved_manifest_json = json.dumps(saved_accounts, ensure_ascii=False)
         allowed_convs_json = json.dumps(allowed_convs, ensure_ascii=False)
-        user_settings_json = json.dumps(load_user_settings(), ensure_ascii=False)
+        user_settings_json = json.dumps(load_user_settings(instance_id=instance_id, account_email=actual_account), ensure_ascii=False)
 
         return (
             "(() => {\n"
@@ -607,15 +740,15 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             import server as srv_mod
-            if self.path.startswith('/sync') or self.path.startswith('/quota'):
+            if self.path.startswith('/sync') or self.path.startswith('/quota') or self.path.startswith('/api/quota'):
                 import urllib.parse
                 parsed = urllib.parse.urlparse(self.path)
                 q_params = urllib.parse.parse_qs(parsed.query)
                 req_inst = q_params.get('instance', [None])[0]
                 force = 'force' in self.path
-                if req_inst == 'instance_2':
-                    target_acc = get_instance_active_account("instance_2")
-                    sec_path = Path.home() / ".gemini" / "antigravity" / "active_quota_instance_2.json"
+                if req_inst and req_inst != 'instance_1':
+                    target_acc = get_instance_active_account(req_inst)
+                    sec_path = Path.home() / ".gemini" / "antigravity" / f"active_quota_{req_inst}.json"
                     usage = None
                     if force:
                         usage = get_account_profile_data(target_acc, force_refresh=True)
@@ -687,8 +820,8 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                     manifest = srv.load_manifest()
                     resp_data['savedAccounts'] = manifest
 
-                    if req_inst == 'instance_2':
-                        target_acc = req_acc or get_instance_active_account("instance_2")
+                    if req_inst:
+                        target_acc = req_acc or get_instance_active_account(req_inst)
                     else:
                         target_acc = req_acc or get_instance_active_account("instance_1")
 
@@ -701,6 +834,9 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                         'instance_1': m_eng.get_allowed_conversations('instance_1') if hasattr(m_eng, 'get_allowed_conversations') else [],
                         'instance_2': m_eng.get_allowed_conversations('instance_2') if hasattr(m_eng, 'get_allowed_conversations') else []
                     }
+                    targets = get_devtools_targets()
+                    resp_data['runningInstances'] = [t["instance_id"] for t in targets]
+                    resp_data['runningAccounts'] = {t["instance_id"]: get_instance_active_account(t["instance_id"]) for t in targets}
                 except Exception as e:
                     pass
 
@@ -750,16 +886,27 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps(tasks, ensure_ascii=False).encode('utf-8'))
             elif self.path.startswith('/api/settings'):
-                s = load_user_settings()
+                parsed_url = urllib.parse.urlparse(self.path)
+                query_params = urllib.parse.parse_qs(parsed_url.query)
+                inst = query_params.get('instance_id', [None])[0]
+                acc = query_params.get('account', [None])[0]
+                s = load_user_settings(instance_id=inst, account_email=acc)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.send_header('Connection', 'close')
                 self.end_headers()
                 self.wfile.write(json.dumps(s, ensure_ascii=False).encode('utf-8'))
-            elif self.path == '/api/dual_status':
-                running = srv_mod.is_instance2_running() if hasattr(srv_mod, 'is_instance2_running') else False
-                payload = {'instance2_running': running}
+            elif self.path == '/api/dual_status' or self.path == '/api/instances_status':
+                targets = get_devtools_targets()
+                running_instances = [t["instance_id"] for t in targets]
+                running_accounts = {t["instance_id"]: get_instance_active_account(t["instance_id"]) for t in targets}
+                payload = {
+                    'instance2_running': len(running_instances) > 1 or (hasattr(srv_mod, 'is_instance2_running') and srv_mod.is_instance2_running()),
+                    'running_instances': running_instances,
+                    'running_accounts': running_accounts,
+                    'targets': targets
+                }
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -841,7 +988,9 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                     resp = {'success': True}
                 _cached_account_info = None
             elif self.path.startswith('/api/settings'):
-                ok, res = save_user_settings(data)
+                inst = data.get('instance_id')
+                acc = data.get('account')
+                ok, res = save_user_settings(data, instance_id=inst, account_email=acc)
                 resp = {'success': ok, 'settings': res}
             elif self.path == '/api/oauth_signin':
                 tgt_acc = data.get('accountKey') or data.get('email')
@@ -866,6 +1015,12 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                     sync_mode=data.get('syncMode', 'shared'),
                     enabled=data.get('enabled')
                 )
+            elif self.path == '/api/project_toggle_all':
+                import migration_engine as m_eng
+                resp = m_eng.toggle_project_all(
+                    data.get('projectId'),
+                    state=data.get('state', 'all')
+                )
             elif self.path == '/api/project_sync':
                 import migration_engine as m_eng
                 resp = m_eng.sync_project_to_account(
@@ -878,6 +1033,19 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                 resp = m_eng.unlink_project_from_account(
                     data.get('projectId'),
                     data.get('account')
+                )
+            elif self.path == '/api/task_assign':
+                import migration_engine as m_eng
+                resp = m_eng.set_task_account_assignment(
+                    data.get('taskName') or data.get('name'),
+                    data.get('accounts') or data.get('account', []),
+                    enabled=data.get('enabled')
+                )
+            elif self.path == '/api/task_toggle_all':
+                import migration_engine as m_eng
+                resp = m_eng.toggle_task_all(
+                    data.get('taskName') or data.get('name'),
+                    state=data.get('state', 'all')
                 )
             elif self.path == '/api/task_isolate':
                 import migration_engine as m_eng
@@ -953,9 +1121,19 @@ async def cdp_broadcast_state(ws, extra_toast=None, instance_id="instance_1", ac
         tasks = m_eng.list_scheduled_tasks(account=actual_account) if hasattr(m_eng, 'list_scheduled_tasks') else []
         allowed_convs = m_eng.get_allowed_conversations(actual_account) if hasattr(m_eng, 'get_allowed_conversations') else []
 
+        running_accounts = {}
+        try:
+            for t in get_devtools_targets():
+                acc = t.get("default_account")
+                if acc:
+                    running_accounts[t["instance_id"]] = acc
+        except Exception:
+            pass
+
         payload = json.dumps({
             "activeAccount": active_acc,
             "savedAccounts": manifest,
+            "runningAccounts": running_accounts,
             "conversations": conversations,
             "projects": projects,
             "tasks": tasks,
@@ -1085,7 +1263,7 @@ async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_
                 "msg": f"انتقال {res.get('migrated_count', 0)} گفتگو با موفقیت انجام شد" if res.get("success") else (res.get("error") or "خطا در انتقال"),
                 "isErr": not res.get("success")
             })
-        elif action == "assignProject":
+        elif action in ["assignProject", "setProjectAssignment"]:
             p_id = data.get("projectId")
             accs = data.get("accounts") or data.get("account", [])
             enb = data.get("enabled")
@@ -1093,6 +1271,14 @@ async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_
             res = m_eng.set_project_assignment(p_id, accs, sync_mode=sm, enabled=enb)
             broadcast_all_instances({
                 "msg": "تنظیمات دسترسی پروژه بروزرسانی شد" if res.get("success") else (res.get("error") or "خطا در تخصیص پروژه"),
+                "isErr": not res.get("success")
+            })
+        elif action == "toggleProjectAll":
+            p_id = data.get("projectId")
+            st = data.get("state", "all")
+            res = m_eng.toggle_project_all(p_id, state=st)
+            broadcast_all_instances({
+                "msg": f"پروژه برای {'همه اکانت‌ها فعال' if st == 'all' else 'همه اکانت‌ها غیرفعال'} شد" if res.get("success") else "خطا در تغییر وضعیت پروژه",
                 "isErr": not res.get("success")
             })
         elif action == "syncProject":
@@ -1110,6 +1296,23 @@ async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_
             res = m_eng.unlink_project_from_account(p_id, acc)
             broadcast_all_instances({
                 "msg": f"پروژه با موفقیت از {acc} جدا شد" if res.get("success") else (res.get("error") or "خطا در جداسازی پروژه"),
+                "isErr": not res.get("success")
+            })
+        elif action in ["assignTask", "setTaskAssignment"]:
+            t_name = data.get("taskName") or data.get("name")
+            accs = data.get("accounts") or data.get("account", [])
+            enb = data.get("enabled")
+            res = m_eng.set_task_account_assignment(t_name, accs, enabled=enb)
+            broadcast_all_instances({
+                "msg": "تنظیمات دسترسی تسک بروزرسانی شد" if res.get("success") else (res.get("error") or "خطا در تخصیص تسک"),
+                "isErr": not res.get("success")
+            })
+        elif action == "toggleTaskAll":
+            t_name = data.get("taskName") or data.get("name")
+            st = data.get("state", "all")
+            res = m_eng.toggle_task_all(t_name, state=st)
+            broadcast_all_instances({
+                "msg": f"تسک برای {'همه اکانت‌ها فعال' if st == 'all' else 'همه اکانت‌ها غیرفعال'} شد" if res.get("success") else "خطا در تغییر وضعیت تسک",
                 "isErr": not res.get("success")
             })
         elif action == "isolateTask":
@@ -1142,8 +1345,10 @@ async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_
                 "isErr": not res.get("success")
             })
         elif action in ["save_user_settings", "saveSettings"]:
-            ok, res = save_user_settings(data)
-            log(f"[SETTINGS] Saved user settings via CDP: {ok}")
+            inst = data.get("instance_id") or instance_id
+            acc = data.get("account") or default_account
+            ok, res = save_user_settings(data, instance_id=inst, account_email=acc)
+            log(f"[SETTINGS] Saved user settings via CDP for {inst} / {acc}: {ok}")
     except Exception as e:
         log(f"[CDP ACTION ERROR] [{instance_id}] {e}")
 

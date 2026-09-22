@@ -250,33 +250,32 @@ def list_projects(account=None):
         
         name = prof.get("name") or raw.get("name") or pid
         path = prof.get("path") or raw.get("path") or ""
-        assigned = prof.get("assigned_accounts", [PRIMARY_ACCOUNT])
+        assigned = prof.get("assigned_accounts", [get_primary_account()])
         count = conv_counts.get(pid, 0)
         
-        is_inst2_enabled = any(SECONDARY_ACCOUNT.lower() in a.lower() for a in assigned)
-        is_inst1_enabled = any(PRIMARY_ACCOUNT.lower() in a.lower() for a in assigned)
-
         item = {
             "id": pid,
             "name": name,
             "path": path,
             "assigned_accounts": assigned,
             "conversation_count": count,
-            "is_instance1_enabled": is_inst1_enabled,
-            "is_instance2_enabled": is_inst2_enabled,
-            "is_shared": (is_inst1_enabled and is_inst2_enabled),
-            "sync_mode": prof.get("sync_mode", "shared" if (is_inst1_enabled and is_inst2_enabled) else "isolated")
+            "enabled_all": prof.get("enabled_all", False),
+            "disabled_all": prof.get("disabled_all", len(assigned) == 0),
+            "is_instance1_enabled": any(get_primary_account().lower() in a.lower() for a in assigned),
+            "is_instance2_enabled": any(get_secondary_account().lower() in a.lower() for a in assigned),
+            "is_shared": (len(assigned) > 1 or prof.get("enabled_all", False)),
+            "sync_mode": prof.get("sync_mode", "shared" if len(assigned) > 1 else "isolated")
         }
 
         if account:
-            acc_clean = norm_account(account)
-            if not any(acc_clean.lower() in a.lower() for a in assigned):
+            acc_clean = norm_account(account).lower()
+            if not any(norm_account(a).lower() == acc_clean for a in assigned):
                 continue
 
         items.append(item)
 
-    # Sort projects: shared first, then by conversation count descending
-    items.sort(key=lambda x: (not x["is_shared"], -x["conversation_count"], x["name"].lower()))
+    # Sort projects: active first, then by conversation count descending
+    items.sort(key=lambda x: (x["disabled_all"], -x["conversation_count"], x["name"].lower()))
     return items
 
 def set_project_assignment(project_id, accounts, sync_mode='shared', enabled=None):
@@ -287,58 +286,80 @@ def set_project_assignment(project_id, accounts, sync_mode='shared', enabled=Non
     manifest = load_profile_sync_manifest()
     raw_projects = discover_raw_projects()
 
-    existing = list(manifest.get("project_profiles", {}).get(project_id, {}).get("assigned_accounts", [PRIMARY_ACCOUNT]))
-    existing = [norm_account(x) for x in existing if x]
-
-    if isinstance(accounts, str):
-        if enabled is False:
-            return unlink_project_from_account(project_id, accounts)
-        target = norm_account(accounts)
-        if enabled is True:
-            if target not in existing:
-                existing.append(target)
-            clean_accounts = existing
-        else:
-            clean_accounts = [target]
-    else:
-        clean_accounts = list(dict.fromkeys([norm_account(a) for a in accounts if a and norm_account(a)]))
-
-    # Primary account is always preserved as owner unless explicitly configuring another
-    if PRIMARY_ACCOUNT not in clean_accounts and not (isinstance(accounts, str) and norm_account(accounts) == PRIMARY_ACCOUNT and enabled is False):
-        clean_accounts.insert(0, PRIMARY_ACCOUNT)
-
-    if not clean_accounts:
-        clean_accounts = [PRIMARY_ACCOUNT]
-    
     if project_id not in manifest.get("project_profiles", {}):
         raw = raw_projects.get(project_id, {})
         manifest.setdefault("project_profiles", {})[project_id] = {
             "name": raw.get("name", project_id),
             "path": raw.get("path", ""),
-            "assigned_accounts": clean_accounts,
+            "assigned_accounts": [],
             "sync_mode": sync_mode
         }
-    else:
-        manifest["project_profiles"][project_id]["assigned_accounts"] = clean_accounts
-        manifest["project_profiles"][project_id]["sync_mode"] = sync_mode
 
-    # Update account index lists
-    for acc in [PRIMARY_ACCOUNT, SECONDARY_ACCOUNT]:
-        acc_dict = manifest.setdefault("accounts", {}).setdefault(acc, {"projects": [], "conversations": []})
-        proj_list = acc_dict.setdefault("projects", [])
-        if any(acc.lower() == a.lower() for a in clean_accounts):
-            if project_id not in proj_list:
-                proj_list.append(project_id)
+    existing = list(manifest["project_profiles"][project_id].get("assigned_accounts", []))
+    existing = [norm_account(x) for x in existing if x]
+
+    if isinstance(accounts, str):
+        target = norm_account(accounts)
+        if enabled is False:
+            existing = [a for a in existing if norm_account(a).lower() != target.lower()]
+        elif enabled is True:
+            if not any(norm_account(a).lower() == target.lower() for a in existing):
+                existing.append(target)
         else:
-            if project_id in proj_list:
-                proj_list.remove(project_id)
+            existing = [target]
+        clean_accounts = existing
+    else:
+        clean_accounts = list(dict.fromkeys([norm_account(a) for a in accounts if a and norm_account(a)]))
+
+    manifest["project_profiles"][project_id]["assigned_accounts"] = clean_accounts
+    manifest["project_profiles"][project_id]["sync_mode"] = sync_mode if clean_accounts else "disabled"
+    manifest["project_profiles"][project_id]["disabled_all"] = (len(clean_accounts) == 0)
+    manifest["project_profiles"][project_id]["enabled_all"] = False
 
     save_profile_sync_manifest(manifest)
     return {
         "success": True,
         "project_id": project_id,
         "assigned_accounts": clean_accounts,
-        "sync_mode": sync_mode
+        "sync_mode": manifest["project_profiles"][project_id]["sync_mode"]
+    }
+
+def toggle_project_all(project_id, state="all"):
+    """Enable or disable a project for all saved accounts."""
+    manifest = load_profile_sync_manifest()
+    raw_projects = discover_raw_projects()
+    prof = manifest.setdefault("project_profiles", {}).setdefault(project_id, {
+        "name": raw_projects.get(project_id, {}).get("name", project_id),
+        "path": raw_projects.get(project_id, {}).get("path", "")
+    })
+    
+    if state == "all":
+        man_path = os.path.join(ACCOUNTS_DIR, 'manifest.json')
+        saved_accs = []
+        if os.path.exists(man_path):
+            try:
+                with open(man_path, 'r', encoding='utf-8') as f:
+                    saved_accs = list(json.load(f).keys())
+            except Exception:
+                pass
+        if not saved_accs:
+            saved_accs = [get_primary_account()]
+        prof["assigned_accounts"] = saved_accs
+        prof["enabled_all"] = True
+        prof["disabled_all"] = False
+        prof["sync_mode"] = "shared"
+    else:
+        prof["assigned_accounts"] = []
+        prof["enabled_all"] = False
+        prof["disabled_all"] = True
+        prof["sync_mode"] = "disabled"
+
+    save_profile_sync_manifest(manifest)
+    return {
+        "success": True,
+        "project_id": project_id,
+        "state": state,
+        "assigned_accounts": prof["assigned_accounts"]
     }
 
 def sync_project_to_account(project_id, target_account, include_conversations=False):
@@ -769,7 +790,7 @@ def discover_windows_scheduled_tasks(force=False):
 
 def list_scheduled_tasks(account=None):
     """
-    List all developer / agent scheduled tasks with isolation states and owner accounts.
+    List all developer / agent scheduled tasks with isolation states, assigned accounts, and owner accounts.
     """
     manifest = load_task_manifest()
     known_tasks = manifest.get("tasks", {})
@@ -783,29 +804,43 @@ def list_scheduled_tasks(account=None):
         l_info = live_tasks.get(name, {})
 
         owner = m_info.get("owner_account", PRIMARY_ACCOUNT)
-        is_isolated = m_info.get("isolated_from_account2", (owner.lower() == PRIMARY_ACCOUNT.lower()))
-        allowed_inst = m_info.get("allowed_instances", ["instance_1"] if is_isolated else ["instance_1", "instance_2"])
         
-        status = l_info.get("status") or ("Ready" if m_info.get("enabled", True) else "Disabled")
-        enabled = (status.lower() != "disabled") and m_info.get("enabled", True)
+        # Dynamic multi-account assignment support
+        assigned = m_info.get("assigned_accounts")
+        if assigned is None:
+            is_isolated = m_info.get("isolated_from_account2", (owner.lower() == PRIMARY_ACCOUNT.lower()))
+            if is_isolated:
+                assigned = [owner]
+            else:
+                assigned = [PRIMARY_ACCOUNT, SECONDARY_ACCOUNT] if SECONDARY_ACCOUNT else [PRIMARY_ACCOUNT]
+        clean_assigned = [norm_account(a) for a in assigned if a]
+
+        disabled_all = m_info.get("disabled_all", len(clean_assigned) == 0)
+        enabled_all = m_info.get("enabled_all", False)
+        
+        status = l_info.get("status") or ("Ready" if m_info.get("enabled", True) and not disabled_all else "Disabled")
+        enabled = (status.lower() != "disabled") and m_info.get("enabled", True) and not disabled_all
         next_run = l_info.get("next_run", "Scheduled")
         desc = m_info.get("description") or f"Scheduled Agent Task: {name}"
 
         # If user wants to filter by account
         if account:
             acc_clean = norm_account(account)
-            if acc_clean == SECONDARY_ACCOUNT and is_isolated and owner != SECONDARY_ACCOUNT:
-                status = "Isolated (Blocked in Account 2)"
+            if acc_clean and not any(a.lower() == acc_clean.lower() for a in clean_assigned):
+                status = f"Isolated (Blocked in {acc_clean})"
                 enabled = False
 
         task_list.append({
             "name": name,
             "task_name": name,
             "owner_account": owner,
+            "assigned_accounts": clean_assigned,
+            "disabled_all": disabled_all,
+            "enabled_all": enabled_all,
             "status": status,
             "enabled": enabled,
-            "isolated_from_account2": is_isolated,
-            "allowed_instances": allowed_inst,
+            "isolated_from_account2": (SECONDARY_ACCOUNT not in clean_assigned),
+            "allowed_instances": m_info.get("allowed_instances", ["instance_1", "instance_2"]),
             "next_run": next_run,
             "description": desc,
             "project_path": m_info.get("project_path", "")
@@ -813,6 +848,136 @@ def list_scheduled_tasks(account=None):
 
     task_list.sort(key=lambda x: (x["owner_account"] == "shared", x["name"]))
     return task_list
+
+def set_task_account_assignment(task_name, accounts, enabled=None):
+    """
+    Assign arbitrary accounts to a scheduled task or toggle an account on/off.
+    accounts can be a list of account emails, or a single account string with enabled (True/False).
+    """
+    manifest = load_task_manifest()
+    tasks = manifest.setdefault("tasks", {})
+    task_entry = tasks.setdefault(task_name, {
+        "name": task_name,
+        "system_type": "windows_scheduled_task"
+    })
+
+    existing = task_entry.get("assigned_accounts")
+    if existing is None:
+        owner = norm_account(task_entry.get("owner_account", PRIMARY_ACCOUNT))
+        is_iso = task_entry.get("isolated_from_account2", True)
+        existing = [owner] if is_iso else ([PRIMARY_ACCOUNT, SECONDARY_ACCOUNT] if SECONDARY_ACCOUNT else [PRIMARY_ACCOUNT])
+    existing = [norm_account(a) for a in existing if a]
+
+    if isinstance(accounts, str):
+        target = norm_account(accounts)
+        if enabled is False:
+            existing = [a for a in existing if norm_account(a).lower() != target.lower()]
+        elif enabled is True:
+            if not any(norm_account(a).lower() == target.lower() for a in existing):
+                existing.append(target)
+        else:
+            existing = [target]
+        clean_accounts = existing
+    else:
+        clean_accounts = list(dict.fromkeys([norm_account(a) for a in accounts if a and norm_account(a)]))
+
+    disabled_all = (len(clean_accounts) == 0)
+    task_entry["assigned_accounts"] = clean_accounts
+    task_entry["disabled_all"] = disabled_all
+    task_entry["enabled_all"] = False
+    task_entry["enabled"] = not disabled_all
+    task_entry["isolated_from_account2"] = (norm_account(SECONDARY_ACCOUNT).lower() not in [a.lower() for a in clean_accounts])
+    
+    # Sync system schtasks status if on Windows
+    if disabled_all:
+        try:
+            cmd = ['schtasks', '/change', '/tn', task_name, '/disable']
+            kwargs = {'capture_output': True, 'text': True}
+            if platform.system().lower() == 'windows':
+                kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+            subprocess.run(cmd, **kwargs)
+        except Exception:
+            pass
+    elif len(clean_accounts) > 0:
+        try:
+            cmd = ['schtasks', '/change', '/tn', task_name, '/enable']
+            kwargs = {'capture_output': True, 'text': True}
+            if platform.system().lower() == 'windows':
+                kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+            subprocess.run(cmd, **kwargs)
+        except Exception:
+            pass
+
+    save_task_manifest(manifest)
+    return {
+        "success": True,
+        "task_name": task_name,
+        "assigned_accounts": clean_accounts,
+        "disabled_all": disabled_all,
+        "enabled": not disabled_all
+    }
+
+def toggle_task_all(task_name, state="all"):
+    """Enable or disable a scheduled task for all saved accounts."""
+    manifest = load_task_manifest()
+    tasks = manifest.setdefault("tasks", {})
+    task_entry = tasks.setdefault(task_name, {
+        "name": task_name,
+        "system_type": "windows_scheduled_task"
+    })
+
+    if state == "all":
+        man_path = os.path.join(ACCOUNTS_DIR, 'manifest.json')
+        saved_accs = []
+        if os.path.exists(man_path):
+            try:
+                with open(man_path, 'r', encoding='utf-8') as f:
+                    saved_accs = list(json.load(f).keys())
+            except Exception:
+                pass
+        if not saved_accs:
+            saved_accs = [PRIMARY_ACCOUNT]
+            if SECONDARY_ACCOUNT:
+                saved_accs.append(SECONDARY_ACCOUNT)
+        
+        task_entry["assigned_accounts"] = saved_accs
+        task_entry["enabled_all"] = True
+        task_entry["disabled_all"] = False
+        task_entry["enabled"] = True
+        task_entry["isolated_from_account2"] = False
+        
+        try:
+            cmd = ['schtasks', '/change', '/tn', task_name, '/enable']
+            kwargs = {'capture_output': True, 'text': True}
+            if platform.system().lower() == 'windows':
+                kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+            subprocess.run(cmd, **kwargs)
+        except Exception:
+            pass
+    else:
+        task_entry["assigned_accounts"] = []
+        task_entry["enabled_all"] = False
+        task_entry["disabled_all"] = True
+        task_entry["enabled"] = False
+        task_entry["isolated_from_account2"] = True
+
+        try:
+            cmd = ['schtasks', '/change', '/tn', task_name, '/disable']
+            kwargs = {'capture_output': True, 'text': True}
+            if platform.system().lower() == 'windows':
+                kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+            subprocess.run(cmd, **kwargs)
+        except Exception:
+            pass
+
+    save_task_manifest(manifest)
+    return {
+        "success": True,
+        "task_name": task_name,
+        "state": state,
+        "assigned_accounts": task_entry["assigned_accounts"],
+        "enabled": task_entry["enabled"]
+    }
 
 def set_task_isolation(task_name, owner_account=PRIMARY_ACCOUNT, isolate_from_account2=True, allowed_instances=None, requesting_account=None):
     """
@@ -927,25 +1092,37 @@ def check_task_guard(task_name, current_account=None, instance_id=None):
     """
     Runtime execution guard for scheduled tasks, cron jobs, and background runners.
     Returns whether current_account and instance_id are permitted to run task_name.
-    Strict bidirectional isolation: Account 1 tasks never run in Account 2, and vice versa.
+    Strict multi-account assignment checking.
     """
     manifest = load_task_manifest()
     task_entry = manifest.get("tasks", {}).get(task_name)
     if not task_entry:
         return {"allowed": True, "reason": "Unmanaged task"}
 
-    owner = norm_account(task_entry.get("owner_account", PRIMARY_ACCOUNT))
-    allowed_instances = task_entry.get("allowed_instances", ["instance_1"])
-    isolated1 = task_entry.get("isolated_from_account1", False)
-    isolated2 = task_entry.get("isolated_from_account2", False)
+    if task_entry.get("disabled_all") is True or task_entry.get("enabled") is False:
+        return {
+            "allowed": False,
+            "reason": f"Task '{task_name}' is explicitly disabled for all accounts."
+        }
 
     curr_instance = instance_id or os.environ.get("ANTIGRAVITY_INSTANCE_ID", "instance_1")
 
     if not current_account:
-        if curr_instance == "instance_2" or os.environ.get("ANTIGRAVITY_ACCOUNT") == SECONDARY_ACCOUNT:
-            current_account = SECONDARY_ACCOUNT
-        else:
-            # Detect active account from active_quota.json
+        try:
+            import sync_daemon
+            current_account = sync_daemon.get_instance_active_account(curr_instance)
+        except Exception:
+            pass
+        if not current_account:
+            # Check active_<instance_id>.txt
+            f_inst = os.path.join(ACCOUNTS_DIR, f"active_{curr_instance}.txt")
+            if os.path.exists(f_inst):
+                try:
+                    with open(f_inst, "r", encoding="utf-8") as f:
+                        current_account = f.read().strip()
+                except Exception:
+                    pass
+        if not current_account:
             active_quota_file = os.path.join(ANTIGRAVITY_DIR, 'active_quota.json')
             if os.path.exists(active_quota_file):
                 try:
@@ -954,12 +1131,27 @@ def check_task_guard(task_name, current_account=None, instance_id=None):
                         current_account = q.get('email')
                 except Exception:
                     pass
-            if not current_account:
-                current_account = PRIMARY_ACCOUNT
+        if not current_account:
+            current_account = PRIMARY_ACCOUNT
 
     curr_clean = norm_account(current_account)
 
-    # 1. Instance check
+    # Multi-account assignment check
+    assigned = task_entry.get("assigned_accounts")
+    if assigned is not None:
+        clean_assigned = [norm_account(a).lower() for a in assigned if a]
+        if curr_clean.lower() not in clean_assigned:
+            return {
+                "allowed": False,
+                "reason": f"Task '{task_name}' is assigned only to {assigned}, blocked for '{curr_clean}'."
+            }
+        return {"allowed": True, "assigned_accounts": assigned}
+
+    # Backward compatibility fallback:
+    owner = norm_account(task_entry.get("owner_account", PRIMARY_ACCOUNT))
+    allowed_instances = task_entry.get("allowed_instances", ["instance_1"])
+    isolated2 = task_entry.get("isolated_from_account2", False)
+
     if allowed_instances and curr_instance not in allowed_instances:
         return {
             "allowed": False,
@@ -967,7 +1159,6 @@ def check_task_guard(task_name, current_account=None, instance_id=None):
             "reason": f"Task '{task_name}' is restricted to {allowed_instances}, current instance is '{curr_instance}'."
         }
 
-    # 2. Account 2 isolation
     if curr_clean == SECONDARY_ACCOUNT and (isolated2 or owner != SECONDARY_ACCOUNT):
         return {
             "allowed": False,
@@ -975,8 +1166,7 @@ def check_task_guard(task_name, current_account=None, instance_id=None):
             "reason": f"Task '{task_name}' is assigned to '{owner}' and blocked for account 2 ('{curr_clean}')."
         }
 
-    # 3. Account 1 isolation
-    if curr_clean == PRIMARY_ACCOUNT and (isolated1 or owner == SECONDARY_ACCOUNT):
+    if curr_clean == PRIMARY_ACCOUNT and owner == SECONDARY_ACCOUNT:
         return {
             "allowed": False,
             "owner": owner,
